@@ -46,10 +46,12 @@ type ToolAction =
   | "reminder"
   | "summarize_today"
   | "usage_report"
+  | "set_group_mode"
   | "ignore";
 
 interface RoutedIntent {
   action: ToolAction;
+  mode?: GroupMode;
   reply?: string;
   memory?: string;
   query?: string;
@@ -76,6 +78,15 @@ interface MediaFile {
   dataUrl: string;
 }
 
+interface PendingMediaMessage {
+  message: Message;
+  messageType: MessageType;
+  typeName: string;
+  timestamp: number;
+  talkerName: string;
+  processedText?: string;
+}
+
 export class ChatGPTBot {
   botName: string = "";
   startTime: Date = new Date();
@@ -89,6 +100,9 @@ export class ChatGPTBot {
   private openaiApiInstance: any;
   private reminderLoopStarted = false;
   private lastGroupReplyAt: Map<string, number> = new Map();
+  private pendingMediaByChat: Map<string, PendingMediaMessage[]> = new Map();
+  private readonly pendingMediaTtlMs = 10 * 60 * 1000;
+  private readonly pendingMediaLimit = 6;
 
   private chatgptModelConfig: object = {
     model: Config.openaiModel,
@@ -167,12 +181,15 @@ export class ChatGPTBot {
     }
 
     const context = await this.createContext(message);
-    const mode = this.parseGroupModeCommand(text);
-    if (context.scope === "group" && mode) {
-      this.store.setGroupMode(context.chatId, context.chatName, mode);
-      await message.say(
-        `已切换为${this.describeGroupMode(mode)}。你也可以说“机器人进入安静模式/智能模式/活跃模式”来调整。`
-      );
+    const modeCommand = this.parseDirectGroupModeCommand(text);
+    if (context.scope === "group" && modeCommand.type === "menu") {
+      await message.say(this.groupModeMenu());
+      return true;
+    }
+
+    if (context.scope === "group" && modeCommand.type === "switch") {
+      this.store.setGroupMode(context.chatId, context.chatName, modeCommand.mode);
+      await message.say(`已切换：${this.describeGroupMode(modeCommand.mode)}`);
       return true;
     }
 
@@ -181,7 +198,7 @@ export class ChatGPTBot {
         [
           "我现在支持：",
           "1. 私聊直接对话，不需要 Hi bot:",
-          "2. 群聊可切换安静模式、智能模式、活跃模式",
+          "2. 群聊可用 #模式 / #安静 / #智能 / #活跃 切换模式",
           "3. 自然语言让我记住信息、查询记忆、设置提醒",
           "4. 说“总结今天”或“今天 token 消耗”查看总结",
         ].join("\n")
@@ -225,8 +242,20 @@ export class ChatGPTBot {
     }
 
     const cleanText = this.cleanMessage(rawText, context).trim();
+    const mediaContext = await this.consumeReferencedMediaIfNeeded(
+      cleanText || rawText,
+      context
+    );
     const enrichedText = await this.enrichTextWithLink(cleanText || rawText);
-    const replyMessage = await this.handleUserText(enrichedText, context);
+    const userText = mediaContext
+      ? [
+          enrichedText,
+          "",
+          "用户正在询问最近收到的媒体，以下是媒体理解结果：",
+          mediaContext,
+        ].join("\n")
+      : enrichedText;
+    const replyMessage = await this.handleUserText(userText, context);
     if (!replyMessage) {
       return;
     }
@@ -256,6 +285,8 @@ export class ChatGPTBot {
         return this.handleSummarizeToday(context);
       case "usage_report":
         return this.handleUsageReport(context);
+      case "set_group_mode":
+        return this.handleSetGroupMode(intent, context);
       case "ignore":
         return intent.reply || "";
       case "chat":
@@ -315,7 +346,7 @@ export class ChatGPTBot {
     text: string,
     context: ChatContext
   ): Promise<RoutedIntent> {
-    if (!Config.agentRouterEnabled || !this.mayNeedTool(text)) {
+    if (!Config.agentRouterEnabled || !this.mayNeedTool(text, context)) {
       return { action: "chat" };
     }
 
@@ -323,17 +354,21 @@ export class ChatGPTBot {
       "你是微信机器人的工具路由器。请判断用户是否需要调用工具。",
       "不要因为用户没有写命令就拒绝；自然语言也可以触发工具。",
       "只输出 JSON，不要 Markdown。",
-      "action 只能是 chat, remember, recall, reminder, summarize_today, usage_report, ignore。",
+      "action 只能是 chat, remember, recall, reminder, summarize_today, usage_report, set_group_mode, ignore。",
       "如果用户让你记住、保存、登记信息，使用 remember，并提取 memory。",
       "如果用户询问之前保存的信息，使用 recall，并提取 query。",
       "如果用户要求提醒，使用 reminder，并给出 remindAt 的 ISO 8601 时间和 reminderContent。",
       "如果用户要求总结今天/本群/当前对话，使用 summarize_today。",
       "如果用户询问 token、消耗、调用次数，使用 usage_report。",
+      "如果群聊用户想调整机器人发言频率，使用 set_group_mode，并给出 mode：quiet、smart 或 active。",
+      "quiet 表示少说话、只在被点名时回复；smart 表示正常智能判断；active 表示更主动参与。",
       `当前日期：${this.currentDate}`,
       `会话：${context.chatName}`,
+      `会话类型：${context.scope}`,
       `发言人：${context.talkerName}`,
       "示例输出：",
       "{\"action\":\"remember\",\"memory\":\"高数考试是7月10日上午\",\"tags\":[\"考试\"]}",
+      "{\"action\":\"set_group_mode\",\"mode\":\"quiet\"}",
     ].join("\n");
 
     try {
@@ -441,6 +476,18 @@ export class ChatGPTBot {
     return lines.join("\n");
   }
 
+  private handleSetGroupMode(intent: RoutedIntent, context: ChatContext): string {
+    if (context.scope !== "group") {
+      return "群聊模式只能在群里切换。";
+    }
+    const mode = this.isGroupMode(intent.mode) ? intent.mode : null;
+    if (!mode) {
+      return this.groupModeMenu();
+    }
+    this.store.setGroupMode(context.chatId, context.chatName, mode);
+    return `已切换：${this.describeGroupMode(mode)}`;
+  }
+
   private async completeChat(
     messages: Array<any>,
     context: ChatContext,
@@ -488,18 +535,28 @@ export class ChatGPTBot {
     context: ChatContext,
     messageType: MessageType
   ) {
-    const shouldReply = this.shouldRespond(message.text() || "", context);
     const typeName = MessageType[messageType] || "Unknown";
-    let understoodText = `[${typeName}]`;
+    const shouldProcess = this.shouldProcessMediaMessage(
+      message.text() || "",
+      context
+    );
+
+    this.rememberPendingMedia(message, context, messageType, typeName);
+
+    if (!shouldProcess) {
+      this.store.addMessage({
+        ...context,
+        role: "user",
+        text: `[${typeName}] 已收到，未调用多模态模型。需要理解时可在后续消息中 @我并说“看一下这张图/这段语音/这个视频”。`,
+        messageType,
+      });
+      return;
+    }
+
+    let understoodText = "";
 
     try {
-      if (messageType === MessageType.Audio) {
-        understoodText = await this.transcribeAudioMessage(message, context);
-      } else if (messageType === MessageType.Image) {
-        understoodText = await this.describeImageMessage(message, context);
-      } else if (messageType === MessageType.Video) {
-        understoodText = await this.describeVideoMessage(message, context);
-      }
+      understoodText = await this.processMediaMessage(message, context, messageType);
     } catch (error) {
       console.error(`❌ Failed to process ${typeName} message: ${error}`);
       understoodText = `[${typeName}] 多模态处理失败：${error}`;
@@ -512,10 +569,6 @@ export class ChatGPTBot {
       messageType,
     });
 
-    if (!shouldReply) {
-      return;
-    }
-
     const replyMessage = await this.handleUserText(understoodText, context);
     if (replyMessage) {
       const sentMessage = await this.replyToContext(message, context, replyMessage);
@@ -526,6 +579,143 @@ export class ChatGPTBot {
         messageType: MessageType.Text,
       });
     }
+  }
+
+  private shouldProcessMediaMessage(text: string, context: ChatContext): boolean {
+    if (context.scope === "private") {
+      return Config.privateAutoReply || this.startsWithTrigger(text);
+    }
+    if (!text.trim()) {
+      return false;
+    }
+    return this.shouldRespond(text, context);
+  }
+
+  private isSupportedMediaMessage(messageType: MessageType): boolean {
+    return [
+      MessageType.Audio,
+      MessageType.Image,
+      MessageType.Video,
+    ].includes(messageType);
+  }
+
+  private rememberPendingMedia(
+    message: Message,
+    context: ChatContext,
+    messageType: MessageType,
+    typeName: string
+  ) {
+    if (!this.isSupportedMediaMessage(messageType)) {
+      return;
+    }
+    this.prunePendingMedia(context.chatId);
+    const pending = this.pendingMediaByChat.get(context.chatId) || [];
+    pending.push({
+      message,
+      messageType,
+      typeName,
+      timestamp: Date.now(),
+      talkerName: context.talkerName,
+    });
+    this.pendingMediaByChat.set(
+      context.chatId,
+      pending.slice(-this.pendingMediaLimit)
+    );
+  }
+
+  private async consumeReferencedMediaIfNeeded(
+    text: string,
+    context: ChatContext
+  ): Promise<string> {
+    this.prunePendingMedia(context.chatId);
+    const pending = this.pendingMediaByChat.get(context.chatId) || [];
+    if (!pending.length || !this.referencesRecentMedia(text)) {
+      return "";
+    }
+
+    const preferredType = this.preferredMediaTypeFromText(text);
+    const media =
+      [...pending]
+        .reverse()
+        .find((item) => !preferredType || item.messageType === preferredType) ||
+      pending[pending.length - 1];
+    if (!media) {
+      return "";
+    }
+
+    if (!media.processedText) {
+      media.processedText = await this.processMediaMessage(
+        media.message,
+        context,
+        media.messageType
+      );
+      this.store.addMessage({
+        ...context,
+        talkerName: media.talkerName,
+        role: "user",
+        text: media.processedText,
+        messageType: media.messageType,
+      });
+    }
+
+    return [
+      `最近媒体类型：${media.typeName}`,
+      `发送者：${media.talkerName}`,
+      media.processedText,
+    ].join("\n");
+  }
+
+  private prunePendingMedia(chatId: string) {
+    const now = Date.now();
+    const pending = (this.pendingMediaByChat.get(chatId) || []).filter(
+      (item) => now - item.timestamp <= this.pendingMediaTtlMs
+    );
+    if (pending.length) {
+      this.pendingMediaByChat.set(chatId, pending);
+    } else {
+      this.pendingMediaByChat.delete(chatId);
+    }
+  }
+
+  private referencesRecentMedia(text: string): boolean {
+    const compact = text.replace(/\s+/g, "");
+    return (
+      this.isMentioned(text) ||
+      this.startsWithTrigger(text) ||
+      /这张|这个图|这段视频|这条语音|刚才.*(图|图片|截图|照片|视频|语音|音频)|上面.*(图|图片|截图|照片|视频|语音|音频)|上一条|前面.*(图|图片|截图|照片|视频|语音|音频)|图片|截图|照片|图里|图中|视频|语音|音频|看一下|看看|识别|转文字|解释一下/i.test(
+        compact
+      )
+    );
+  }
+
+  private preferredMediaTypeFromText(text: string): MessageType | null {
+    if (/语音|音频|录音|转文字/i.test(text)) {
+      return MessageType.Audio;
+    }
+    if (/视频|片段|抽帧/i.test(text)) {
+      return MessageType.Video;
+    }
+    if (/图片|截图|照片|图里|图中|这张/i.test(text)) {
+      return MessageType.Image;
+    }
+    return null;
+  }
+
+  private async processMediaMessage(
+    message: Message,
+    context: ChatContext,
+    messageType: MessageType
+  ): Promise<string> {
+    if (messageType === MessageType.Audio) {
+      return this.transcribeAudioMessage(message, context);
+    }
+    if (messageType === MessageType.Image) {
+      return this.describeImageMessage(message, context);
+    }
+    if (messageType === MessageType.Video) {
+      return this.describeVideoMessage(message, context);
+    }
+    return `[${MessageType[messageType] || "Unknown"}]`;
   }
 
   private async describeImageMessage(
@@ -869,12 +1059,13 @@ export class ChatGPTBot {
 
     const mode = this.store.getGroupMode(context.chatId, Config.defaultGroupMode);
     const direct = this.isMentioned(text) || this.startsWithTrigger(text);
+    const modeSwitch = this.looksLikeModeSwitchRequest(text);
     if (mode === "quiet") {
-      return direct;
+      return direct || modeSwitch;
     }
 
     if (mode === "smart") {
-      return direct || this.looksAddressedToBot(text);
+      return direct || modeSwitch || this.looksAddressedToBot(text);
     }
 
     const now = Date.now();
@@ -882,8 +1073,9 @@ export class ChatGPTBot {
     const cooledDown = now - lastReplyAt > 90 * 1000;
     const shouldSpeak =
       direct ||
+      modeSwitch ||
       this.looksAddressedToBot(text) ||
-      this.mayNeedTool(text) ||
+      this.mayNeedTool(text, context) ||
       (cooledDown && this.looksLikeOpenQuestion(text));
     if (shouldSpeak) {
       this.lastGroupReplyAt.set(context.chatId, now);
@@ -1081,13 +1273,21 @@ export class ChatGPTBot {
       "reminder",
       "summarize_today",
       "usage_report",
+      "set_group_mode",
       "ignore",
     ].includes(String(action));
   }
 
-  private mayNeedTool(text: string): boolean {
-    return /记住|记一下|保存|存一下|提醒|闹钟|别忘|总结|复盘|消耗|token|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业/i.test(
-      text
+  private isGroupMode(mode: unknown): mode is GroupMode {
+    return ["quiet", "smart", "active"].includes(String(mode));
+  }
+
+  private mayNeedTool(text: string, context?: ChatContext): boolean {
+    return (
+      /记住|记一下|保存|存一下|提醒|闹钟|别忘|总结|复盘|消耗|token|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业/i.test(
+        text
+      ) ||
+      (context?.scope === "group" && this.looksLikeModeSwitchRequest(text))
     );
   }
 
@@ -1117,11 +1317,43 @@ export class ChatGPTBot {
     );
   }
 
-  private parseGroupModeCommand(text: string): GroupMode | null {
+  private parseDirectGroupModeCommand(
+    text: string
+  ): { type: "none" } | { type: "menu" } | { type: "switch"; mode: GroupMode } {
     const compact = text.replace(/\s+/g, "");
-    const looksLikeModeCommand = /群聊模式|群模式|机器人模式|进入.*模式|切换.*模式|改成.*模式/.test(
-      compact
-    );
+    if (/^#(模式|群模式|机器人模式|mode|help|\?)$/i.test(compact)) {
+      return { type: "menu" };
+    }
+    if (/^#([123])$/.test(compact)) {
+      const modeMap: Record<string, GroupMode> = {
+        "1": "quiet",
+        "2": "smart",
+        "3": "active",
+      };
+      return { type: "switch", mode: modeMap[compact.slice(1)] };
+    }
+    if (/^#(安静|静默|少说话|quiet|silent)$/.test(compact)) {
+      return { type: "switch", mode: "quiet" };
+    }
+    if (/^#(智能|正常|默认|smart|normal)$/.test(compact)) {
+      return { type: "switch", mode: "smart" };
+    }
+    if (/^#(活跃|主动|积极|多说话|active)$/.test(compact)) {
+      return { type: "switch", mode: "active" };
+    }
+    if (/^(群聊模式|群模式|机器人模式|切换模式|模式切换)$/.test(compact)) {
+      return { type: "menu" };
+    }
+    const mode = this.parseNaturalGroupMode(text);
+    return mode ? { type: "switch", mode } : { type: "none" };
+  }
+
+  private parseNaturalGroupMode(text: string): GroupMode | null {
+    const compact = text.replace(/\s+/g, "");
+    const looksLikeModeCommand =
+      /群聊模式|群模式|机器人模式|进入.*模式|切换.*模式|改成.*模式/.test(
+        compact
+      );
     if (!looksLikeModeCommand) {
       return null;
     }
@@ -1135,6 +1367,22 @@ export class ChatGPTBot {
       return "active";
     }
     return null;
+  }
+
+  private looksLikeModeSwitchRequest(text: string): boolean {
+    return /群聊模式|群模式|机器人模式|切换模式|进入.*模式|改成.*模式|安静一点|少说话|别太主动|活跃一点|积极一点|多说点|正常回复|默认模式/i.test(
+      text.replace(/\s+/g, "")
+    );
+  }
+
+  private groupModeMenu(): string {
+    return [
+      "群聊模式：",
+      "#1 安静：只在被 @ 或触发词出现时回复",
+      "#2 智能：明显问到我或需要工具时回复",
+      "#3 活跃：更主动参与，但有冷却时间",
+      "也可以直接发：#安静 / #智能 / #活跃",
+    ].join("\n");
   }
 
   private describeGroupMode(mode: GroupMode): string {
