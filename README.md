@@ -1,3 +1,9 @@
+# MyWechatBot
+
+Based on ChatGPT on WeChat, customized for Qwen models, Wechaty Web login, memory, token usage tracking, and agent-style tools.
+
+## Upstream
+
 # ChatGPT on WeChat ![GitHub License](https://img.shields.io/github/license/kx-huang/chatgpt-on-wechat?label=License&color=orange) [![wakatime](https://wakatime.com/badge/github/kx-Huang/ChatGPT-on-WeChat.svg)](https://wakatime.com/badge/github/kx-Huang/ChatGPT-on-WeChat) ![Railway Deploy](https://img.shields.io/github/checks-status/kx-huang/chatgpt-on-wechat/master?logo=railway&style=flat&label=Deploy) ![GitHub Repo stars](https://img.shields.io/github/stars/kx-huang/chatgpt-on-wechat?style=social)
 
 <!-- omit in toc -->
