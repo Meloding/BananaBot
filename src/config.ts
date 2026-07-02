@@ -16,7 +16,14 @@ else {
   configFile = {
     openaiApiKey: process.env.OPENAI_API_KEY,
     openaiOrganizationID: process.env.OPENAI_ORGANIZATION_KEY,
+    openaiBasePath: process.env.OPENAI_BASE_PATH,
+    openaiModel: process.env.OPENAI_MODEL,
     chatgptTriggerKeyword: process.env.CHATGPT_TRIGGER_KEYWORD,
+    privateAutoReply: process.env.PRIVATE_AUTO_REPLY,
+    defaultGroupMode: process.env.DEFAULT_GROUP_MODE,
+    botDataPath: process.env.BOT_DATA_PATH,
+    historyMessageLimit: process.env.HISTORY_MESSAGE_LIMIT,
+    agentRouterEnabled: process.env.AGENT_ROUTER_ENABLED,
   };
 }
 
@@ -27,8 +34,25 @@ if (configFile.openaiApiKey === undefined) {
   );
 }
 
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return !["false", "0", "no", "off"].includes(value.toLowerCase());
+  }
+  return fallback;
+}
+
 export const Config: IConfig = {
   openaiApiKey: configFile.openaiApiKey,
   openaiOrganizationID: configFile.openaiOrganizationID || "",
+  openaiBasePath: configFile.openaiBasePath || "",
+  openaiModel: configFile.openaiModel || "qwen-plus",
   chatgptTriggerKeyword: configFile.chatgptTriggerKeyword || "",
+  privateAutoReply: parseBoolean(configFile.privateAutoReply, true),
+  defaultGroupMode: configFile.defaultGroupMode || "smart",
+  botDataPath: configFile.botDataPath || "./data/bot-store.json",
+  historyMessageLimit: Number(configFile.historyMessageLimit || 12),
+  agentRouterEnabled: parseBoolean(configFile.agentRouterEnabled, true),
 };

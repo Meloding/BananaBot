@@ -1,3 +1,10 @@
-openaiApiKey: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-openaiOrganizationID: "org-XXXXXXXXXXXXXXX"
+openaiApiKey: ""
+openaiOrganizationID: ""
+openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+openaiModel: "qwen-plus"
 chatgptTriggerKeyword: "Hi bot:"
+privateAutoReply: true
+defaultGroupMode: "smart"
+botDataPath: "./data/bot-store.json"
+historyMessageLimit: 12
+agentRouterEnabled: true

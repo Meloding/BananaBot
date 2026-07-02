@@ -24,6 +24,11 @@ async function main() {
       console.log(`✅ User ${user} has logged in`);
       chatGPTBot.setBotName(user.name());
       await chatGPTBot.startGPTBot();
+      chatGPTBot.startReminderLoop(weChatBot);
+    })
+    // keep recoverable puppet errors from crashing the process
+    .on("error", (error: any) => {
+      console.error(`❌ Wechaty error: ${error?.stack || error}`);
     })
     // message handler
     .on("message", async (message: any) => {
@@ -36,7 +41,10 @@ async function main() {
         }
         console.log(`📨 ${message}`);
         // handle message for customized task handlers
-        await chatGPTBot.onCustimzedTask(message);
+        const handled = await chatGPTBot.onCustimzedTask(message);
+        if (handled) {
+          return;
+        }
         // handle message for chatGPT bot
         await chatGPTBot.onMessage(message);
       } catch (e) {
