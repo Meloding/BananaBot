@@ -5,7 +5,7 @@ export type ChatScope = "private" | "group";
 export type GroupMode = "quiet" | "smart" | "active";
 
 export interface ChatContext {
-  scope: ChatScope;
+  scope: ChatScope | "system";
   chatId: string;
   chatName: string;
   talkerId: string;
@@ -15,7 +15,7 @@ export interface ChatContext {
 export interface StoredMessage {
   id: string;
   timestamp: string;
-  scope: ChatScope;
+  scope: ChatScope | "system";
   chatId: string;
   chatName: string;
   talkerId: string;
@@ -120,7 +120,7 @@ export class BotStore {
     context: ChatContext,
     content: string,
     tags: string[] = [],
-    scope: ChatScope | "global" = context.scope
+    scope: ChatScope | "global" = context.scope === "system" ? "global" : context.scope
   ): MemoryItem {
     const memory: MemoryItem = {
       id: this.createId("mem"),
@@ -145,12 +145,7 @@ export class BotStore {
       .filter(Boolean);
 
     return this.data.memories
-      .filter(
-        (memory) =>
-          memory.scope === "global" ||
-          memory.chatId === context.chatId ||
-          memory.createdBy === context.talkerName
-      )
+      .filter((memory) => memory.chatId === context.chatId)
       .map((memory) => ({
         memory,
         score: this.scoreMemory(memory, normalizedQuery, queryParts),
@@ -170,7 +165,7 @@ export class BotStore {
       id: this.createId("rem"),
       createdAt: new Date().toISOString(),
       remindAt,
-      scope: context.scope,
+      scope: context.scope === "system" ? "private" : context.scope,
       chatId: context.chatId,
       chatName: context.chatName,
       createdBy: context.talkerName,

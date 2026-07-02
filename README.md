@@ -1,349 +1,531 @@
 # MyWechatBot
 
-Based on ChatGPT on WeChat, customized for Qwen models, Wechaty Web login, memory, token usage tracking, and agent-style tools.
+一个基于 Wechaty + Qwen/百炼 OpenAI 兼容接口的微信智能机器人。
 
-## Upstream
+当前版本重点能力：
 
-# ChatGPT on WeChat ![GitHub License](https://img.shields.io/github/license/kx-huang/chatgpt-on-wechat?label=License&color=orange) [![wakatime](https://wakatime.com/badge/github/kx-Huang/ChatGPT-on-WeChat.svg)](https://wakatime.com/badge/github/kx-Huang/ChatGPT-on-WeChat) ![Railway Deploy](https://img.shields.io/github/checks-status/kx-huang/chatgpt-on-wechat/master?logo=railway&style=flat&label=Deploy) ![GitHub Repo stars](https://img.shields.io/github/stars/kx-huang/chatgpt-on-wechat?style=social)
+- 私聊默认直接回复，不需要唤醒词。
+- 群聊支持安静、智能、活跃三种模式。
+- 历史消息、长期记忆、提醒、token 用量按会话隔离保存。
+- 支持自然语言触发工具，不需要用户记住固定命令。
+- 支持图片理解、语音转写尝试、视频抽帧理解尝试、链接预读取。
+- 微信回复前会剥离 Markdown，并按微信消息长度智能分段。
 
-<!-- omit in toc -->
+## 目录
 
-🤖️ Turn your WeChat into ChatGPT [**within only 2 steps!**](#12-deploy-on-cloud) 🤖️
+- [架构概览](#架构概览)
+- [隐私和记忆隔离](#隐私和记忆隔离)
+- [服务器部署](#服务器部署)
+- [配置说明](#配置说明)
+- [运行和维护](#运行和维护)
+- [使用方式](#使用方式)
+- [多模态能力](#多模态能力)
+- [工具能力](#工具能力)
+- [数据文件](#数据文件)
+- [常见问题](#常见问题)
+- [开发说明](#开发说明)
 
-<p align="center">
-  <img src="doc/img/demo.png" alt="Group chat demo for @kx-Huang/ChatGPT-on-WeChat" />
-</p>
+## 架构概览
 
-## Features <!-- omit in toc -->
+```text
+微信消息
+  ↓
+Wechaty / wechaty-puppet-wechat4u
+  ↓
+消息过滤和会话隔离
+  ↓
+文本 / 图片 / 语音 / 视频 / 链接适配
+  ↓
+记忆、提醒、token 用量存储
+  ↓
+Qwen 模型 / 工具路由 / 多模态模型
+  ↓
+Markdown 清洗和智能分段
+  ↓
+微信回复
+```
 
-This project is implemented based on [this amazing project](https://github.com/fuergaosi233/wechat-chatgpt) that I contibuted before, with [`Wechaty SDK`](https://github.com/wechaty/wechaty) and `OpenAI API`, we achieve:
+主要代码：
 
-- fast and robust connection to a set of AI models with different features, typically `gpt-4o` and `gpt-3.5-turbo` which powers `ChatGPT`
-- stable, persistent and rapid deployment on cloud servers `Railway`
+- `src/main.ts`：Wechaty 登录、扫码、消息入口。
+- `src/chatgpt.ts`：机器人主逻辑、工具路由、多模态处理、回复格式化。
+- `src/store.ts`：本地数据存储，负责消息、记忆、提醒、token 记录。
+- `src/config.ts`：读取 `config.yaml` 或环境变量。
 
-## 0. Table of Content <!-- omit in toc -->
+## 隐私和记忆隔离
 
-- [ChatGPT on WeChat    ](#chatgpt-on-wechat----)
-  - [1. How to Deploy this Bot?](#1-how-to-deploy-this-bot)
-    - [1.1 Deploy in Local](#11-deploy-in-local)
-      - [1.1.1 Get your OpenAI API Keys](#111-get-your-openai-api-keys)
-      - [1.1.2 Configure Environment Variables](#112-configure-environment-variables)
-      - [1.1.3 Setup the Docker](#113-setup-the-docker)
-      - [1.1.4 Login your WeChat](#114-login-your-wechat)
-    - [1.2 Deploy on Railway](#12-deploy-on-railway)
-      - [1.2.1 Configure on `Railway`](#121-configure-on-railway)
-      - [1.2.2 Deploy \& Login on `Railway`](#122-deploy--login-on-railway)
-    - [1.3 Deploy on Alibaba Cloud ComputeNest](#13-deploy-on-alibaba-cloud-computenest)
-  - [2. Any Fancy Advanced Settings?](#2-any-fancy-advanced-settings)
-    - [2.1 Config Reply in Error](#21-config-reply-in-error)
-    - [2.2 Config `OpenAI` Models](#22-config-openai-models)
-    - [2.3 Config Model Features](#23-config-model-features)
-    - [2.4 Add Customized Task Handler](#24-add-customized-task-handler)
-  - [3. Common Errors and Troubleshooting](#3-common-errors-and-troubleshooting)
-    - [3.1 Assertion Error during Login or Self-chat 🤯](#31-assertion-error-during-login-or-self-chat-)
-    - [3.2 I can't trigger auto reply 🤔](#32-i-cant-trigger-auto-reply-)
-  - [4. How to Contribute to this Project?](#4-how-to-contribute-to-this-project)
-  - [5. Acknowledgement](#5-acknowledgement)
-  - [Thanks for your support by starring this project!](#thanks-for-your-support-by-starring-this-project)
+隔离是强制要求，也是默认行为。
 
-## 1. How to Deploy this Bot?
+当前隔离边界是 `chatId`：
 
-You can deploy **in local** or **on cloud**,  whatever you want.
+- 私聊：每个联系人有独立 `chatId`。
+- 群聊：每个群有独立 `room.id`。
+- 私聊 A 的历史和记忆不会被私聊 B 读取。
+- 群 A 的历史和记忆不会被群 B 读取。
+- 群里的记忆不会进入私聊。
+- 私聊里的记忆不会进入群聊。
 
-The [deploy on cloud](#12-deploy-on-cloud) method is recommended.
+`store.searchMemories()` 只检索当前 `chatId` 下的记忆。默认不读取全局记忆。
 
-### 1.1 Deploy in Local
-
-#### 1.1.1 Get your OpenAI API Keys
-
-- `openaiApiKey` can be generated in the [**API Keys Page** in your OpenAI account](https://beta.openai.com/account/api-keys)
-- `openaiOrganizationID` is optional, which can be found in the [**Settings Page** in your Open AI account](https://beta.openai.com/account/org-settings)
-
----
-
-#### 1.1.2 Configure Environment Variables
-
-You can copy the template `config.yaml.example` into a new file `config.yaml`, and paste the configurations:
+token 用量查询默认也只返回当前会话的用量。若确实需要私聊中查看全局用量，可以在配置中开启：
 
 ```yaml
-openaiApiKey: "<your_openai_api_key>"
-openaiOrganizationID: "<your_organization_id>"
-chatgptTriggerKeyword: "<your_keyword>"
+allowGlobalUsageReport: true
 ```
 
-Or you can export the environment variables listed in `.env.example` to your system, which is a more encouraged method to keep your `OpenAI API Key` safe:
+不建议在群聊中开放全局用量，避免泄漏其他会话信息。
+
+## 服务器部署
+
+以下以阿里云 ECS / Ubuntu 或 Debian 系服务器为例。
+
+### 1. 安装 Node.js
+
+推荐 Node.js 16。当前项目已经在 Node `16.20.2` 下验证可用。
 
 ```bash
-export OPENAI_API_KEY="sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-export OPENAI_ORGANIZATION_KEY="org-XXXXXXXXXXXXXXX"
-export CHATGPT_TRIGGER_KEYWORD="Hi bot:"
+cd /opt
+wget https://nodejs.org/dist/v16.20.2/node-v16.20.2-linux-x64.tar.xz
+tar -xf node-v16.20.2-linux-x64.tar.xz
 ```
 
-**Please note:**
-
-- `chatgptTriggerKeyword` is the keyword which can trigger auto-reply:
-  - In private chat, the message **starts with** it will trigger auto-reply
-  - In group chat, the message **starts with** `@Name <keyword>` will trigger auto-reply
-- `chatgptTriggerKeyword` can be **empty string**, which means:
-  - In private chat, **every messages** will trigger auto-reply
-  - In group chat, only **"@ the bot"** will trigger auto-reply
-
----
-
-#### 1.1.3 Setup the Docker
-
-1. Setup Docker Image
+检查：
 
 ```bash
-docker build -t chatgpt-on-wechat .
+/opt/node-v16.20.2-linux-x64/bin/node -v
+/opt/node-v16.20.2-linux-x64/bin/npm -v
 ```
 
-2. Setup Docker Container
+### 2. 克隆代码
 
 ```bash
-docker run -v $(pwd)/config.yaml:/app/config.yaml chatgpt-on-wechat
+cd /opt
+git clone git@github.com:Meloding/MyWechatBot.git chatgpt-on-wechat
+cd /opt/chatgpt-on-wechat
 ```
 
-You can also build with Docker Compose:
-
-1. Start the container
+### 3. 安装依赖
 
 ```bash
-docker-compose up -d
+/opt/node-v16.20.2-linux-x64/bin/npm install
 ```
 
-2. View the QR code to log in to wechat
+### 4. 安装 Chromium 运行依赖
+
+Wechaty Web 协议需要 Puppeteer/Chromium。Ubuntu/Debian 常见依赖：
 
 ```bash
-docker-compose logs -f
+apt-get update
+apt-get install -y \
+  ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
+  libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 libnspr4 libnss3 \
+  libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 xdg-utils
 ```
 
----
+### 5. 写入配置
 
-#### 1.1.4 Login your WeChat
-
-Once you deploy the bot successfully, just follow the `terminal` or `Logs` in Docker container prompt carefully:
-
-1. Scan the QR Code with mobile WeChat
-2. Click "Log in" to allow desktop login (where our bot stays)
-3. Wait a few seconds and start chatting!
-
-🤖 **Enjoy your powerful chatbot!** 🤖
-
----
-
-### 1.2 Deploy on Railway
-
-Click the button below to fork this repo and deploy with Railway!
-
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template/zKIfYk?referralCode=D6wD0x)
-
----
-
-#### 1.2.1 Configure on `Railway`
-
-Fill in the following blanks:
-
-1. Your forked repo name (can be any name you like)
-2. Choose make it private or not (also up to you)
-3. Environment variables (for how to get OpenAI API keys, please refer to [1.1.1 Get your OpenAI API Keys](#111-get-your-openai-api-keys))
-
-![Railway Config](doc/img/Railway_config.png)
-
-**Please note:**
-
-Make sure the environment variables are set in RailWay instead of writing directly in `config.yaml`. It's really **NOT** recommended to implicitly write out your `OpenAI API Key` in public repo. Anyone with your key can get access to the OpenAI API services, and it's possbile for you to lose money if you pay for that.
-
----
-
-#### 1.2.2 Deploy & Login on `Railway`
-
-The deploy process is automatic. It may take a few minutes for the first time. As you see the `Success`, click the tab to see the details. (which is your secret WeChat console!)
-
-![Railway Deploy](doc/img/Railway_deploy.png)
-
-Click `Deply Logs` and you will see everything is setting up, wait for a QR Code to pop up. Scan it as if you are login to your desktop WeChat, and click "Log in" on your mobile WeChat.
-
-![Railway Scan QR Code](doc/img/Railway_QRCode.png)
-
-Finally, everything is good to go! You will see the logs when people sending you messagem, and whenever the chatbot is auto-triggered to reply.
-
-### 1.3 Deploy on Alibaba Cloud ComputeNest
-
-One-click deployment on Alibaba Cloud ComputeNest: 
-
-[![Deploy on AlibabaCloud ComputeNest](doc/img/deploy_to_computenest.svg)](https://computenest.console.aliyun.com/service/instance/create/default?type=user&ServiceName=ChatGPT-on-WeChat社区版)
-
-Follow the deployment guide to deploy ChatGPT-on-WeChat on Alibaba Cloud. Both domestic site and internationl sites are supported.
-- [Deployment Guide (domestic site)](https://computenest.console.aliyun.com/service/detail/cn-hangzhou/service-a81e49ab7dd24520a365?isInstance=true)
-- [Deployment Guide (internationl site)](https://computenest.console.aliyun.com/service/detail/ap-southeast-1/service-37a1f9f9b9e1482ba61b?isInstance=true)
-Switch Alibaba Cloud console's language to see guide in different language.
-
-First, provides cloud resource configurations such as ECS instance type and network configurations. 
-![ECS instance configuration](doc/img/computenest_resource_config.png)
-Also needs to set ChatGPT-On-WeChat software configuration.
-![ChatGPT-On-WeChat software configuration](doc/img/computenest_software_config.png)
-
-When you confirm to deploy, Alibaba Cloud ComputeNest creates ECS instance in your owner Alibaba Cloud account, deploys ChatGPT-on-WeChat application and starts it on ECS instance automatically. 
-
-After ComputeNest service instance is deployed, check "How to use" about how to login to ECS instance.
-
-![How to use](doc/img/computenest_how_to_use.png)
-
-Run command in ECS workbench to get the QR code.
-![QR code](doc/img/computenest_qr_code.png)
-
-Scan it as if you are login to your desktop WeChat, and click "Log in" on your mobile WeChat.
-
-Finally, everything is good to go! You will see the logs when people sending you messagem, and whenever the chatbot is auto-triggered to reply.
-
-
-## 2. Any Fancy Advanced Settings?
-
-### 2.1 Config Reply in Error
-
-When the OpenAI API encounters some errors (e.g. over-crowded traffic, no authorization, ...), the chatbot will auto-reply the pre-configured message.
-
-You can change it in `src/chatgpt.js`:
-
-```typescript
-const chatgptErrorMessage = "🤖️：ChatGPT摆烂了，请稍后再试～";
+```bash
+cp config.yaml.example config.yaml
+nano config.yaml
 ```
 
----
+`config.yaml` 包含真实 API Key，已经被 `.gitignore` 忽略，不要提交到 Git。
 
-### 2.2 Config `OpenAI` Models
+### 6. 编译检查
 
-You can change whatever `OpenAI` Models you like to handle task at different capability, time-consumption and expense trade-off. (e.g. model with better capability costs more time to respond)
-
-**Currently, the latest `GPT-4o` model is up and running!**
-
-~~Since the latest `gpt-4` model is currently in a limited beta and only accessible to those who have been granted access, currently we use the `gpt-3.5-turbo` model as default. Of course, if you have the access to `gpt-4` API, you can just change the model to `gpt-4` without any other modification.~~
-
-According to OpenAI doc,
-
-> GPT-4o (“o” for “omni”) is our most advanced model. It is multimodal (accepting text or image inputs and outputting text), and it has the same high intelligence as GPT-4 Turbo but is much more efficient—it generates text 2x faster and is 50% cheaper. Additionally, GPT-4o has the best vision and performance across non-English languages of any of our models.
-
-> ~~GPT-3.5 models can understand and generate natural language or code. Our most capable and cost effective model in the GPT-3.5 family is `gpt-3.5-turbo` which has been optimized for chat but works well for traditional completions tasks as well.~~
-
-Also, for the same model, we can configure dozens of parameter (e.g. answer randomness, maximum word limit...). For example, for the `temperature` field:
-
-> Higher values like **0.8** will make the output more random, while lower values like **0.2** will make it more focused and deterministic.
-
-You can configure all of them in `src/chatgpt.js`:
-
-```typescript
-chatgptModelConfig: object = {
-  // this model field is required
-  model: "gpt-4o",
-  // add your ChatGPT model parameters below
-  temperature: 0.8,
-  // max_tokens: 2000,
-};
+```bash
+/opt/node-v16.20.2-linux-x64/bin/npm run build
 ```
 
-For more details, please refer to [OpenAI Models Doc](https://beta.openai.com/docs/models/overview).
+### 7. systemd 服务
 
----
+创建 `/etc/systemd/system/chatgpt-on-wechat.service`：
 
-### 2.3 Config Model Features
+```ini
+[Unit]
+Description=ChatGPT on WeChat
+Wants=network-online.target
+After=network-online.target
 
-You can change whatever features you like to handle different types of tasks. (e.g. complete text, edit text, generate code...)
+[Service]
+Type=simple
+WorkingDirectory=/opt/chatgpt-on-wechat
+Environment=NODE_ENV=production
+Environment=WECHATY_PUPPET=wechaty-puppet-wechat4u
+Environment=PATH=/opt/node-v16.20.2-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/node-v16.20.2-linux-x64/bin/npm start
+Restart=always
+RestartSec=10
 
-Currently, we use `createChatCompletion()` powered by `gpt-4o` model, which:
-
-> take a series of messages as input, and return a model-generated message as output.
-
-You can configure in `src/chatgpt.js`:
-
-```typescript
-const response = await this.openaiApiInstance.createChatCompletion({
-  ...this.chatgptModelConfig,
-  messages: inputMessages,
-});
+[Install]
+WantedBy=multi-user.target
 ```
 
-For more details, please refer to [OpenAI API Doc](https://beta.openai.com/docs/api-reference/introduction).
+启动：
 
----
-
-### 2.4 Add Customized Task Handler
-
-You can add your own task handlers to expand the ability of this chatbot!
-
-In `src/chatgpt.ts` `ChatGPTBot.onCustimzedTask()`, write your own task handler:
-
-```typescript
-// e.g. if a message starts with "Hello", the bot sends "World!"
-if (message.text().startsWith("Hello")) {
-  await message.say("World!");
-  return;
-}
+```bash
+systemctl daemon-reload
+systemctl enable chatgpt-on-wechat.service
+systemctl start chatgpt-on-wechat.service
 ```
 
-## 3. Common Errors and Troubleshooting
+扫码登录：
 
-### 3.1 Assertion Error during Login or Self-chat 🤯
+```bash
+journalctl -u chatgpt-on-wechat.service -f
+```
 
-- Error Log:
+日志里会出现二维码链接。用机器人微信号扫码确认即可。
 
-  ```log
-  uncaughtException AssertionError [ERR_ASSERTION]: 1 == 0
-      at Object.equal (/app/node_modules/wechat4u/src/util/global.js:53:14)
-      at /app/node_modules/wechat4u/src/core.js:195:16
-      at processTicksAndRejections (node:internal/process/task_queues:96:5) {
-    code: 2,
-    details: 'AssertionError [ERR_ASSERTION]: 1 == 0\n' +
-      '    at Object.equal (/app/node_modules/wechat4u/src/util/global.js:53:14)\n' +
-      '    at /app/node_modules/wechat4u/src/core.js:195:16\n' +
-      '    at processTicksAndRejections (node:internal/process/task_queues:96:5)'
-  }
-  ```
+## 配置说明
 
-- Solution:
-  - If see this error during login, please check [issue #8](https://github.com/kx-Huang/ChatGPT-on-WeChat/issues/8)
-  - If see this error during self-chat, please check [issue #38](https://github.com/kx-Huang/ChatGPT-on-WeChat/issues/38)
+示例：
 
-### 3.2 I can't trigger auto reply 🤔
-- Solution:
-    - Before deployment, read the trigger conditions in [1.1.2 Configure Environment Variables](#112-configure-environment-variables)
-    - After deployment, check the console logs for following lines:
-      - 🎯 Trigger keyword in private chat is: `<keyword>`
-      - 🎯 Trigger keyword in group chat is: `@Name <keyword>`
+```yaml
+openaiApiKey: ""
+openaiOrganizationID: ""
+openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+openaiModel: "qwen-plus"
+chatgptTriggerKeyword: "Hi bot:"
 
-## 4. How to Contribute to this Project?
+privateAutoReply: true
+defaultGroupMode: "smart"
 
-You are more than welcome to raise some issues, fork this repo, commit your code and submit pull request. And after code review, we can merge your contribution. I'm really looking forward to develop more interesting features!
+botDataPath: "./data/bot-store.json"
+historyMessageLimit: 12
+agentRouterEnabled: true
 
-Also, there're something in the to-do list for future enhancement:
+multimodalEnabled: true
+visionModel: "qwen-vl-plus"
+audioModel: "qwen-audio-turbo-latest"
+maxMediaBytes: 10485760
+videoFrameCount: 3
 
-1. Chat with context (integrate with [`LangChain`](https://github.com/langchain-ai/langchain)):
-  - Keep track of every on-going conversation for each private chat or group chat
-  - Dynamic drop or summarize the history conversation sent throught API in case the token gets oversized
-  - Set time-out for a conversation when users stop chatting for a while
-2. More AI capability:
-  - Integrate OpenAI `DALL·E` model for AI image creation. Triggered by customized keyword (e.g. Hi bot, draw...)
-  - Integrate OpenAi `Whisper` model for speech recognition. Triggered by voice messages and do transcription or translation
-3. More flexible depolyment:
-  - Make deployment templates on other cloud platforms
-  - Optimize depolyment process to be more robust and compatible on different OS
+replyMaxLength: 500
+replyMaxSegments: 8
+stripMarkdown: true
 
-## 5. Acknowledgement
+allowGlobalUsageReport: false
+```
 
-Great thanks to:
+字段说明：
 
-- [@leoncsyang](https://github.com/leoncsyang) for fixing [Issue #81](https://github.com/kx-Huang/ChatGPT-on-WeChat/issues/81)
-- [@hdfk7](https://github.com/hdfk7) for fixing [Issue #67](https://github.com/kx-Huang/ChatGPT-on-WeChat/issues/67)
-- [@jichangfeng](https://github.com/jichangfeng) for merging [PR #61](https://github.com/kx-Huang/ChatGPT-on-WeChat/pull/61)
-- [@wenle](https://github.com/wenle) for merging [PR #92](https://github.com/kx-Huang/ChatGPT-on-WeChat/pull/92), [PR #93](https://github.com/kx-Huang/ChatGPT-on-WeChat/pull/93)
+| 字段 | 说明 |
+| --- | --- |
+| `openaiApiKey` | 百炼 / DashScope API Key |
+| `openaiBasePath` | OpenAI 兼容模式地址 |
+| `openaiModel` | 普通聊天模型，默认 `qwen-plus` |
+| `chatgptTriggerKeyword` | 兼容旧触发词；私聊默认不需要 |
+| `privateAutoReply` | 私聊是否自动回复所有文本 |
+| `defaultGroupMode` | 群聊默认模式：`quiet` / `smart` / `active` |
+| `botDataPath` | 本地数据文件 |
+| `historyMessageLimit` | 每次对话带入的最近消息条数 |
+| `agentRouterEnabled` | 是否启用 LLM 工具路由 |
+| `multimodalEnabled` | 是否启用多模态 |
+| `visionModel` | 图片/视频帧理解模型 |
+| `audioModel` | 语音转写模型 |
+| `maxMediaBytes` | 单个媒体文件最大字节数 |
+| `videoFrameCount` | 视频最多抽帧数量 |
+| `replyMaxLength` | 单条微信消息最大长度 |
+| `replyMaxSegments` | 一次回复最多拆分几条 |
+| `stripMarkdown` | 发送微信前是否移除 Markdown 标记 |
+| `allowGlobalUsageReport` | 私聊中是否允许查看全局 token 用量 |
 
-## Thanks for your support by starring this project!
+## 运行和维护
 
-<p align="center">
-  <a href="https://github.com/kx-Huang/ChatGPT-on-WeChat/stargazers">
-    <img src="https://reporoster.com/stars/dark/notext/kx-Huang/ChatGPT-on-WeChat" alt="Stargazers repo roster for @kx-Huang/ChatGPT-on-WeChat" />
-  </a>
-  <a href="https://github.com/kx-Huang/ChatGPT-on-WeChat/stargazers">
-    <img src="https://api.star-history.com/svg?repos=kx-Huang/ChatGPT-on-WeChat&type=Date" alt="Star history chart for @kx-Huang/ChatGPT-on-WeChat"/>
-  </a>
-</p>
+查看状态：
+
+```bash
+systemctl status chatgpt-on-wechat.service
+```
+
+实时日志：
+
+```bash
+journalctl -u chatgpt-on-wechat.service -f
+```
+
+重启：
+
+```bash
+systemctl restart chatgpt-on-wechat.service
+```
+
+停止：
+
+```bash
+systemctl stop chatgpt-on-wechat.service
+```
+
+更新代码：
+
+```bash
+cd /opt/chatgpt-on-wechat
+git pull
+/opt/node-v16.20.2-linux-x64/bin/npm install
+/opt/node-v16.20.2-linux-x64/bin/npm run build
+systemctl restart chatgpt-on-wechat.service
+```
+
+## 使用方式
+
+### 私聊
+
+私聊默认不用触发词：
+
+```text
+你好，帮我解释一下肠道菌群移植是什么
+```
+
+保存记忆：
+
+```text
+帮我记住：我的高数考试是7月10日上午
+```
+
+查询记忆：
+
+```text
+我之前让你记住的考试安排是什么？
+```
+
+设置提醒：
+
+```text
+明天上午9点提醒我交作业
+```
+
+查看 token：
+
+```text
+今天 token 消耗怎么样？
+```
+
+### 群聊
+
+群聊模式：
+
+- `quiet`：安静模式，只在被 @ 或触发词出现时回复。
+- `smart`：智能模式，被明显问到或需要工具时回复。
+- `active`：活跃模式，会更积极参与，但有冷却时间，避免刷屏。
+
+切换模式：
+
+```text
+机器人进入安静模式
+机器人进入智能模式
+机器人进入活跃模式
+```
+
+群聊里也可以 @：
+
+```text
+@布拿拿 帮我总结今天这个群聊了什么
+```
+
+## 多模态能力
+
+### 图片
+
+收到图片后，机器人会尝试：
+
+1. 从 Wechaty 读取图片文件。
+2. 转成 data URL。
+3. 调用 `visionModel` 做图片理解。
+4. 将理解结果保存到当前会话历史。
+5. 根据当前会话模式决定是否回复。
+
+适合场景：
+
+- 截图 OCR
+- 图片内容解释
+- 图表初步解读
+- 聊天截图总结
+
+### 语音
+
+微信 Web 协议不能稳定调用微信客户端自带的“语音转文字”结果。
+
+当前策略：
+
+1. 使用 `message.toFileBox()` 获取微信语音文件。
+2. 尝试调用 `audioModel` 转写。
+3. 将转写结果交给普通对话和工具路由理解。
+
+注意：`wechaty-puppet-wechat4u` 拉到的微信语音通常是 `.sil` 文件。若音频模型不支持该格式，需要后续增加 silk/ffmpeg 转码。
+
+### 视频
+
+视频处理是尽力而为：
+
+1. 保存视频到临时目录。
+2. 如果服务器有 `ffmpeg`，按 `videoFrameCount` 抽帧。
+3. 将抽出的图片帧交给 `visionModel` 总结。
+4. 如果没有 `ffmpeg`，会提示当前不能抽帧。
+
+安装 `ffmpeg`：
+
+```bash
+apt-get install -y ffmpeg
+```
+
+### 链接
+
+文本里出现 `http://` 或 `https://` 链接时，机器人会尝试：
+
+1. 预读取网页标题和正文片段。
+2. 过滤 localhost、内网 IP 等不安全地址。
+3. 将摘录作为上下文交给模型总结。
+
+## 工具能力
+
+工具不是靠固定命令触发，而是由 LLM 路由判断。
+
+支持的动作：
+
+- `chat`：普通聊天
+- `remember`：保存长期记忆
+- `recall`：查询当前会话记忆
+- `reminder`：设置提醒
+- `summarize_today`：总结当天当前会话
+- `usage_report`：查询当前会话 token 用量
+- `ignore`：判断不需要回复
+
+例如以下自然语言都可以：
+
+```text
+帮我记住我周五下午要交开题报告
+我之前说的 DDL 有哪些？
+明天早上8点提醒我查房前看一下这个病人的检验
+总结一下今天群里讨论的重点
+今天这个群消耗了多少 token？
+```
+
+## 数据文件
+
+默认数据文件：
+
+```bash
+/opt/chatgpt-on-wechat/data/bot-store.json
+```
+
+包含：
+
+- `messages`：消息历史
+- `memories`：长期记忆
+- `reminders`：提醒
+- `usageRecords`：token 用量
+- `groupSettings`：群聊模式
+
+`data/` 已加入 `.gitignore`，不会提交到仓库。
+
+建议定期备份：
+
+```bash
+tar -czf /root/mywechatbot-data-$(date +%F).tar.gz /opt/chatgpt-on-wechat/data
+```
+
+## 常见问题
+
+### 微信回复里为什么没有 Markdown 加粗？
+
+微信普通文本不渲染 Markdown。直接发送 Markdown 会出现 `**加粗**` 这类星号。
+
+本项目默认启用：
+
+```yaml
+stripMarkdown: true
+```
+
+机器人发送前会移除常见 Markdown 标记，并把 Markdown 链接转成普通文本。
+
+### 回复太长怎么办？
+
+微信单条消息有长度和可读性限制。
+
+本项目会按以下优先级分段：
+
+1. 空行
+2. 换行
+3. 句号、问号、感叹号
+4. 分号、逗号
+5. 硬切分
+
+配置：
+
+```yaml
+replyMaxLength: 500
+replyMaxSegments: 8
+```
+
+超过最大段数后会截断，并提示内容较长。
+
+### 为什么语音转写失败？
+
+常见原因：
+
+- 微信语音是 `.sil` 格式，当前 ASR 模型不支持。
+- 文件超过 `maxMediaBytes`。
+- `audioModel` 配置不正确。
+- 百炼账号没有对应模型权限。
+
+后续可以加入 silk 转 wav/mp3 的转码流程。
+
+### 为什么群里没有回复？
+
+查看群模式：
+
+- 安静模式：必须 @ 或触发词。
+- 智能模式：只有明显问到机器人或需要工具时回复。
+- 活跃模式：更积极，但有冷却时间。
+
+可以在群里说：
+
+```text
+机器人进入活跃模式
+```
+
+### 如何确认 API 是否正常？
+
+重启服务后日志里应有：
+
+```text
+ChatGPT starts success, ready to handle message!
+```
+
+也可以私聊发送：
+
+```text
+请只回复 API 测试成功
+```
+
+## 开发说明
+
+本地开发：
+
+```bash
+npm install
+cp config.yaml.example config.yaml
+npm run build
+npm start
+```
+
+提交前检查：
+
+```bash
+npm run build
+git status --short --ignored
+```
+
+确认以下文件不要提交：
+
+- `config.yaml`
+- `data/`
+- `node_modules/`
+- `dist/`
+
+当前 GitHub 仓库：
+
+```text
+git@github.com:Meloding/MyWechatBot.git
+```

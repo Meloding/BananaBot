@@ -24,6 +24,15 @@ else {
     botDataPath: process.env.BOT_DATA_PATH,
     historyMessageLimit: process.env.HISTORY_MESSAGE_LIMIT,
     agentRouterEnabled: process.env.AGENT_ROUTER_ENABLED,
+    multimodalEnabled: process.env.MULTIMODAL_ENABLED,
+    visionModel: process.env.VISION_MODEL,
+    audioModel: process.env.AUDIO_MODEL,
+    maxMediaBytes: process.env.MAX_MEDIA_BYTES,
+    videoFrameCount: process.env.VIDEO_FRAME_COUNT,
+    replyMaxLength: process.env.REPLY_MAX_LENGTH,
+    replyMaxSegments: process.env.REPLY_MAX_SEGMENTS,
+    stripMarkdown: process.env.STRIP_MARKDOWN,
+    allowGlobalUsageReport: process.env.ALLOW_GLOBAL_USAGE_REPORT,
   };
 }
 
@@ -55,4 +64,13 @@ export const Config: IConfig = {
   botDataPath: configFile.botDataPath || "./data/bot-store.json",
   historyMessageLimit: Number(configFile.historyMessageLimit || 12),
   agentRouterEnabled: parseBoolean(configFile.agentRouterEnabled, true),
+  multimodalEnabled: parseBoolean(configFile.multimodalEnabled, true),
+  visionModel: configFile.visionModel || "qwen-vl-plus",
+  audioModel: configFile.audioModel || "qwen-audio-turbo-latest",
+  maxMediaBytes: Number(configFile.maxMediaBytes || 10 * 1024 * 1024),
+  videoFrameCount: Number(configFile.videoFrameCount || 3),
+  replyMaxLength: Number(configFile.replyMaxLength || 500),
+  replyMaxSegments: Number(configFile.replyMaxSegments || 8),
+  stripMarkdown: parseBoolean(configFile.stripMarkdown, true),
+  allowGlobalUsageReport: parseBoolean(configFile.allowGlobalUsageReport, false),
 };

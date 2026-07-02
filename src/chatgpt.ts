@@ -1,4 +1,11 @@
 import { Config } from "./config.js";
+import fs from "fs";
+import http from "http";
+import https from "https";
+import os from "os";
+import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { Message } from "wechaty";
 import { ContactInterface, RoomInterface } from "wechaty/impls";
 import { Configuration, OpenAIApi } from "openai";
@@ -9,6 +16,8 @@ import {
   GroupMode,
   ReminderItem,
 } from "./store.js";
+
+const execFileAsync = promisify(execFile);
 
 enum MessageType {
   Unknown = 0,
@@ -56,6 +65,15 @@ interface CompletionResult {
   completionTokens: number;
   totalTokens: number;
   estimated: boolean;
+}
+
+interface MediaFile {
+  name: string;
+  mediaType: string;
+  extension: string;
+  buffer: Buffer;
+  base64: string;
+  dataUrl: string;
 }
 
 export class ChatGPTBot {
@@ -207,16 +225,17 @@ export class ChatGPTBot {
     }
 
     const cleanText = this.cleanMessage(rawText, context).trim();
-    const replyMessage = await this.handleUserText(cleanText || rawText, context);
+    const enrichedText = await this.enrichTextWithLink(cleanText || rawText);
+    const replyMessage = await this.handleUserText(enrichedText, context);
     if (!replyMessage) {
       return;
     }
 
-    await this.replyToContext(message, context, replyMessage);
+    const sentMessage = await this.replyToContext(message, context, replyMessage);
     this.store.addMessage({
       ...context,
       role: "assistant",
-      text: replyMessage,
+      text: sentMessage,
       messageType: MessageType.Text,
     });
   }
@@ -407,32 +426,37 @@ export class ChatGPTBot {
 
   private handleUsageReport(context: ChatContext): string {
     const today = new Date().toISOString().slice(0, 10);
-    const todaySummary = this.store.getUsageSummary(today);
     const chatSummary = this.store.getUsageSummary(today, context.chatId);
-    const totalSummary = this.store.getUsageSummary();
-    return [
-      `今天总调用：${todaySummary.calls} 次，${todaySummary.totalTokens} tokens`,
-      `当前会话今天：${chatSummary.calls} 次，${chatSummary.totalTokens} tokens`,
-      `私聊/群聊/系统：${todaySummary.privateTokens}/${todaySummary.groupTokens}/${todaySummary.systemTokens}`,
-      `累计总消耗：${totalSummary.totalTokens} tokens`,
-    ].join("\n");
+    const lines = [
+      `当前会话今天调用：${chatSummary.calls} 次`,
+      `当前会话今天消耗：${chatSummary.totalTokens} tokens`,
+      `输入/输出：${chatSummary.promptTokens}/${chatSummary.completionTokens}`,
+    ];
+    if (Config.allowGlobalUsageReport && context.scope === "private") {
+      const todaySummary = this.store.getUsageSummary(today);
+      const totalSummary = this.store.getUsageSummary();
+      lines.push(`今天全局总消耗：${todaySummary.totalTokens} tokens`);
+      lines.push(`累计全局总消耗：${totalSummary.totalTokens} tokens`);
+    }
+    return lines.join("\n");
   }
 
   private async completeChat(
     messages: Array<any>,
     context: ChatContext,
     feature: string,
-    temperature?: number
+    temperature?: number,
+    model: string = Config.openaiModel
   ): Promise<CompletionResult> {
     const response = await this.openaiApiInstance.createChatCompletion({
-      ...this.chatgptModelConfig,
+      model,
       temperature,
       messages,
     });
     const text = response?.data?.choices[0]?.message?.content?.trim() || "";
     const usage = response?.data?.usage;
     const estimatedPrompt = this.estimateTokens(
-      messages.map((message) => message.content).join("\n")
+      messages.map((message) => this.stringifyContent(message.content)).join("\n")
     );
     const estimatedCompletion = this.estimateTokens(text);
     const promptTokens = usage?.prompt_tokens || estimatedPrompt;
@@ -443,7 +467,7 @@ export class ChatGPTBot {
       scope: context.scope,
       chatId: context.chatId,
       chatName: context.chatName,
-      model: Config.openaiModel,
+      model,
       feature,
       promptTokens,
       completionTokens,
@@ -466,10 +490,25 @@ export class ChatGPTBot {
   ) {
     const shouldReply = this.shouldRespond(message.text() || "", context);
     const typeName = MessageType[messageType] || "Unknown";
+    let understoodText = `[${typeName}]`;
+
+    try {
+      if (messageType === MessageType.Audio) {
+        understoodText = await this.transcribeAudioMessage(message, context);
+      } else if (messageType === MessageType.Image) {
+        understoodText = await this.describeImageMessage(message, context);
+      } else if (messageType === MessageType.Video) {
+        understoodText = await this.describeVideoMessage(message, context);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to process ${typeName} message: ${error}`);
+      understoodText = `[${typeName}] 多模态处理失败：${error}`;
+    }
+
     this.store.addMessage({
       ...context,
       role: "user",
-      text: `[${typeName}]`,
+      text: understoodText,
       messageType,
     });
 
@@ -477,29 +516,350 @@ export class ChatGPTBot {
       return;
     }
 
-    if (messageType === MessageType.Audio) {
-      await this.replyToContext(
-        message,
+    const replyMessage = await this.handleUserText(understoodText, context);
+    if (replyMessage) {
+      const sentMessage = await this.replyToContext(message, context, replyMessage);
+      this.store.addMessage({
+        ...context,
+        role: "assistant",
+        text: sentMessage,
+        messageType: MessageType.Text,
+      });
+    }
+  }
+
+  private async describeImageMessage(
+    message: Message,
+    context: ChatContext
+  ): Promise<string> {
+    if (!Config.multimodalEnabled) {
+      return "[Image] 已收到图片，但多模态功能未开启。";
+    }
+    const media = await this.readMessageMedia(message, MessageType.Image);
+    const result = await this.completeChat(
+      [
+        {
+          role: "system",
+          content:
+            "你是微信机器人的视觉理解模块。请识别图片内容、文字和关键细节。若是截图，请优先提取可读文字和用户可能关心的问题。",
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "请理解这张微信图片，并给出对用户有帮助的回答。" },
+            { type: "image_url", image_url: { url: media.dataUrl } },
+          ],
+        },
+      ],
+      context,
+      "image_understanding",
+      0.2,
+      Config.visionModel
+    );
+    return `[图片理解]\n${result.text}`;
+  }
+
+  private async transcribeAudioMessage(
+    message: Message,
+    context: ChatContext
+  ): Promise<string> {
+    if (!Config.multimodalEnabled) {
+      return "[Audio] 已收到语音，但多模态功能未开启。";
+    }
+    const media = await this.readMessageMedia(message, MessageType.Audio);
+    try {
+      const result = await this.completeChat(
+        [
+          {
+            role: "system",
+            content:
+              "你是微信语音转写模块。请只输出语音转写文本，不要解释，不要加前后缀。",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_audio",
+                input_audio: {
+                  data: media.base64,
+                  format: media.extension.replace(/^\./, "") || "sil",
+                },
+              },
+            ],
+          },
+        ],
         context,
-        "我收到语音了。语音转文字接口已经预留，下一步接入后我就能直接听懂语音。"
+        "audio_transcription",
+        0.1,
+        Config.audioModel
       );
-      return;
+      return `[语音转文字]\n${result.text}`;
+    } catch (error) {
+      return [
+        "[Audio]",
+        `我已收到语音文件 ${media.name}，但当前音频模型没有成功识别。`,
+        "微信 Web 协议不能稳定调用微信内置“转文字”。如果这是 .sil 微信语音，可能需要先加 silk/ffmpeg 转码后再送 ASR。",
+      ].join("\n");
+    }
+  }
+
+  private async describeVideoMessage(
+    message: Message,
+    context: ChatContext
+  ): Promise<string> {
+    if (!Config.multimodalEnabled) {
+      return "[Video] 已收到视频，但多模态功能未开启。";
+    }
+    const media = await this.readMessageMedia(message, MessageType.Video);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-video-"));
+    const videoPath = path.join(tempDir, media.name || `video${media.extension}`);
+    fs.writeFileSync(videoPath, media.buffer);
+    try {
+      const framePaths = await this.extractVideoFrames(videoPath, tempDir);
+      if (!framePaths.length) {
+        return "[Video] 已收到视频，但当前服务器没有可用 ffmpeg，暂时无法抽帧理解。";
+      }
+      const content: Array<any> = [
+        {
+          type: "text",
+          text: "这些图片是同一个微信视频中抽取的关键帧。请总结视频大意、画面变化和可能需要注意的信息。",
+        },
+      ];
+      for (const framePath of framePaths) {
+        const buffer = fs.readFileSync(framePath);
+        content.push({
+          type: "image_url",
+          image_url: {
+            url: `data:image/jpeg;base64,${buffer.toString("base64")}`,
+          },
+        });
+      }
+      const result = await this.completeChat(
+        [
+          {
+            role: "system",
+            content: "你是微信视频理解模块。请根据抽帧图片总结视频内容。",
+          },
+          {
+            role: "user",
+            content,
+          },
+        ],
+        context,
+        "video_understanding",
+        0.2,
+        Config.visionModel
+      );
+      return `[视频理解]\n${result.text}`;
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  private async readMessageMedia(
+    message: Message,
+    messageType: MessageType
+  ): Promise<MediaFile> {
+    const fileBox = await message.toFileBox();
+    const buffer = await fileBox.toBuffer();
+    if (buffer.length > Config.maxMediaBytes) {
+      throw new Error(
+        `媒体文件过大：${buffer.length} bytes，限制为 ${Config.maxMediaBytes} bytes`
+      );
+    }
+    const name = fileBox.name || `message-${message.id}`;
+    const extension = path.extname(name).toLowerCase();
+    const mediaType = this.inferMediaType(fileBox.mediaType, extension, messageType);
+    const base64 = buffer.toString("base64");
+    return {
+      name,
+      mediaType,
+      extension,
+      buffer,
+      base64,
+      dataUrl: `data:${mediaType};base64,${base64}`,
+    };
+  }
+
+  private inferMediaType(
+    mediaType: string,
+    extension: string,
+    messageType: MessageType
+  ): string {
+    if (mediaType && mediaType !== "application/unknown") {
+      return mediaType;
+    }
+    const map: Record<string, string> = {
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png": "image/png",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".m4a": "audio/mp4",
+      ".mp4": "video/mp4",
+      ".mov": "video/quicktime",
+      ".sil": "audio/silk",
+      ".amr": "audio/amr",
+    };
+    if (map[extension]) {
+      return map[extension];
     }
     if (messageType === MessageType.Image) {
-      await this.replyToContext(
-        message,
-        context,
-        "我收到图片了。图片理解会接到 Qwen-VL，下一步可以做截图分析、OCR 和看图总结。"
-      );
-      return;
+      return "image/jpeg";
+    }
+    if (messageType === MessageType.Audio) {
+      return "audio/silk";
     }
     if (messageType === MessageType.Video) {
-      await this.replyToContext(
-        message,
-        context,
-        "我收到视频了。视频先暂不处理，后面会做抽帧后再总结。"
-      );
+      return "video/mp4";
     }
+    return "application/octet-stream";
+  }
+
+  private async extractVideoFrames(
+    videoPath: string,
+    tempDir: string
+  ): Promise<string[]> {
+    const frameCount = Math.max(1, Config.videoFrameCount);
+    const outputPattern = path.join(tempDir, "frame-%02d.jpg");
+    try {
+      await execFileAsync("ffmpeg", [
+        "-y",
+        "-i",
+        videoPath,
+        "-vf",
+        `fps=1/${Math.max(1, Math.floor(30 / frameCount))}`,
+        "-vframes",
+        String(frameCount),
+        outputPattern,
+      ]);
+    } catch (error) {
+      console.warn(`ffmpeg frame extraction failed: ${error}`);
+      return [];
+    }
+    return fs
+      .readdirSync(tempDir)
+      .filter((file) => /^frame-\d+\.jpg$/.test(file))
+      .sort()
+      .map((file) => path.join(tempDir, file));
+  }
+
+  private async enrichTextWithLink(text: string): Promise<string> {
+    const url = this.extractFirstUrl(text);
+    if (!url) {
+      return text;
+    }
+    try {
+      const snippet = await this.fetchWebPageSnippet(url);
+      if (!snippet) {
+        return text;
+      }
+      return [
+        text,
+        "",
+        "以下是链接预读取内容，回答时可以参考：",
+        snippet,
+      ].join("\n");
+    } catch (error) {
+      console.warn(`link preview failed: ${error}`);
+      return text;
+    }
+  }
+
+  private extractFirstUrl(text: string): string | null {
+    const match = text.match(/https?:\/\/[^\s<>"'，。)）]+/i);
+    return match?.[0] || null;
+  }
+
+  private async fetchWebPageSnippet(urlText: string): Promise<string> {
+    const url = new URL(urlText);
+    if (!["http:", "https:"].includes(url.protocol) || this.isUnsafeHost(url.hostname)) {
+      return "";
+    }
+    const html = await this.fetchText(url, 120000);
+    const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "";
+    const body = html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/\s+/g, " ")
+      .trim();
+    return [`标题：${this.cleanHtmlText(title)}`, `正文摘录：${body.slice(0, 1800)}`]
+      .filter((line) => !line.endsWith("："))
+      .join("\n");
+  }
+
+  private fetchText(url: URL, maxBytes: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const client = url.protocol === "https:" ? https : http;
+      const request = client.get(
+        url,
+        {
+          timeout: 8000,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (compatible; MyWechatBot/1.0; +https://github.com/Meloding/MyWechatBot)",
+          },
+        },
+        (response) => {
+          const statusCode = response.statusCode || 0;
+          if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
+            response.resume();
+            const nextUrl = new URL(response.headers.location, url);
+            if (this.isUnsafeHost(nextUrl.hostname)) {
+              reject(new Error("unsafe redirect host"));
+              return;
+            }
+            this.fetchText(nextUrl, maxBytes).then(resolve).catch(reject);
+            return;
+          }
+          if (statusCode < 200 || statusCode >= 300) {
+            response.resume();
+            reject(new Error(`HTTP ${statusCode}`));
+            return;
+          }
+          const chunks: Buffer[] = [];
+          let size = 0;
+          response.on("data", (chunk: Buffer) => {
+            size += chunk.length;
+            if (size <= maxBytes) {
+              chunks.push(chunk);
+            } else {
+              response.destroy();
+            }
+          });
+          response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+          response.on("error", reject);
+        }
+      );
+      request.on("timeout", () => request.destroy(new Error("request timeout")));
+      request.on("error", reject);
+    });
+  }
+
+  private isUnsafeHost(hostname: string): boolean {
+    const host = hostname.toLowerCase();
+    if (host === "localhost" || host.endsWith(".local")) {
+      return true;
+    }
+    return /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(
+      host
+    );
+  }
+
+  private cleanHtmlText(text: string): string {
+    return text
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private shouldRespond(text: string, context: ChatContext): boolean {
@@ -596,32 +956,91 @@ export class ChatGPTBot {
     message: Message,
     context: ChatContext,
     text: string
-  ): Promise<void> {
-    if (!text.trim()) {
-      return;
+  ): Promise<string> {
+    const preparedText = this.prepareReplyForWechat(text);
+    if (!preparedText.trim()) {
+      return "";
     }
     const room = message.room();
     if (context.scope === "group" && room) {
-      await this.reply(room, text);
-      return;
+      await this.reply(room, preparedText);
+      return preparedText;
     }
-    await this.reply(message.talker(), text);
+    await this.reply(message.talker(), preparedText);
+    return preparedText;
   }
 
   private async reply(
     talker: RoomInterface | ContactInterface,
     message: string
   ): Promise<void> {
-    const messages: Array<string> = [];
-    let rest = message;
-    while (rest.length > this.SINGLE_MESSAGE_MAX_SIZE) {
-      messages.push(rest.slice(0, this.SINGLE_MESSAGE_MAX_SIZE));
-      rest = rest.slice(this.SINGLE_MESSAGE_MAX_SIZE);
-    }
-    messages.push(rest);
+    const messages = this.splitWechatMessage(
+      message,
+      Config.replyMaxLength || this.SINGLE_MESSAGE_MAX_SIZE,
+      Config.replyMaxSegments || 8
+    );
     for (const msg of messages) {
       await talker.say(msg);
     }
+  }
+
+  private prepareReplyForWechat(text: string): string {
+    const withoutMarkdown = Config.stripMarkdown ? this.stripMarkdown(text) : text;
+    return withoutMarkdown
+      .replace(/\n{4,}/g, "\n\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .trim();
+  }
+
+  private stripMarkdown(text: string): string {
+    return text
+      .replace(/```[\s\S]*?```/g, (block) =>
+        block.replace(/```[a-zA-Z0-9_-]*/g, "").replace(/```/g, "")
+      )
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/__([^_]+)__/g, "$1")
+      .replace(/\*([^*\n]+)\*/g, "$1")
+      .replace(/_([^_\n]+)_/g, "$1")
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/^\s*[-*+]\s+/gm, "• ")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1（$2）")
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1（图片：$2）")
+      .replace(/^\s{0,3}>\s?/gm, "")
+      .replace(/\n\s*\|[-:| ]+\|\s*\n/g, "\n")
+      .replace(/\|/g, "｜");
+  }
+
+  private splitWechatMessage(
+    text: string,
+    maxLength: number,
+    maxSegments: number
+  ): string[] {
+    const segments: string[] = [];
+    let rest = text.trim();
+    while (rest.length > maxLength && segments.length < maxSegments - 1) {
+      const cutAt = this.findSplitIndex(rest, maxLength);
+      segments.push(rest.slice(0, cutAt).trim());
+      rest = rest.slice(cutAt).trim();
+    }
+    if (rest.length > maxLength && segments.length >= maxSegments - 1) {
+      segments.push(`${rest.slice(0, maxLength - 18).trim()}\n\n（内容较长，已截断）`);
+    } else if (rest) {
+      segments.push(rest);
+    }
+    return segments.filter(Boolean);
+  }
+
+  private findSplitIndex(text: string, maxLength: number): number {
+    const candidates = ["\n\n", "\n", "。", "？", "！", ".", "?", "!", "；", ";", "，", ","];
+    let best = -1;
+    for (const delimiter of candidates) {
+      const index = text.lastIndexOf(delimiter, maxLength);
+      if (index > Math.floor(maxLength * 0.45)) {
+        best = Math.max(best, index + delimiter.length);
+      }
+    }
+    return best > 0 ? best : maxLength;
   }
 
   private async sendReminder(weChatBot: any, reminder: ReminderItem) {
@@ -731,6 +1150,17 @@ export class ChatGPTBot {
     return Math.max(1, Math.ceil(text.length / 2));
   }
 
+  private stringifyContent(content: unknown): string {
+    if (typeof content === "string") {
+      return content;
+    }
+    try {
+      return JSON.stringify(content);
+    } catch {
+      return String(content);
+    }
+  }
+
   private systemContext(): ChatContext {
     return {
       scope: "system",
@@ -738,7 +1168,7 @@ export class ChatGPTBot {
       chatName: "system",
       talkerId: "system",
       talkerName: "system",
-    } as unknown as ChatContext;
+    };
   }
 
   private logApiError(e: any) {

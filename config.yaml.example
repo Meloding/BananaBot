@@ -8,3 +8,12 @@ defaultGroupMode: "smart"
 botDataPath: "./data/bot-store.json"
 historyMessageLimit: 12
 agentRouterEnabled: true
+multimodalEnabled: true
+visionModel: "qwen-vl-plus"
+audioModel: "qwen-audio-turbo-latest"
+maxMediaBytes: 10485760
+videoFrameCount: 3
+replyMaxLength: 500
+replyMaxSegments: 8
+stripMarkdown: true
+allowGlobalUsageReport: false
