@@ -3,6 +3,7 @@ import path from "path";
 
 export type ChatScope = "private" | "group";
 export type GroupMode = "quiet" | "smart" | "active";
+export type ReminderRepeat = "none" | "daily";
 
 export interface ChatContext {
   scope: ChatScope | "system";
@@ -45,6 +46,8 @@ export interface ReminderItem {
   chatName: string;
   createdBy: string;
   content: string;
+  repeat?: ReminderRepeat;
+  lastSentAt?: string;
   status: "pending" | "sent" | "cancelled";
 }
 
@@ -159,7 +162,8 @@ export class BotStore {
   addReminder(
     context: ChatContext,
     remindAt: string,
-    content: string
+    content: string,
+    repeat: ReminderRepeat = "none"
   ): ReminderItem {
     const reminder: ReminderItem = {
       id: this.createId("rem"),
@@ -170,11 +174,22 @@ export class BotStore {
       chatName: context.chatName,
       createdBy: context.talkerName,
       content,
+      repeat,
       status: "pending",
     };
     this.data.reminders.push(reminder);
     this.save();
     return reminder;
+  }
+
+  getReminders(chatId: string, limit = 20): ReminderItem[] {
+    return this.data.reminders
+      .filter((reminder) => reminder.chatId === chatId)
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )
+      .slice(0, limit);
   }
 
   getDueReminders(now = new Date()): ReminderItem[] {
@@ -189,7 +204,18 @@ export class BotStore {
   markReminderSent(id: string) {
     const reminder = this.data.reminders.find((item) => item.id === id);
     if (reminder) {
-      reminder.status = "sent";
+      reminder.lastSentAt = new Date().toISOString();
+      if (reminder.repeat === "daily") {
+        const next = new Date(reminder.remindAt);
+        const now = new Date();
+        do {
+          next.setDate(next.getDate() + 1);
+        } while (next.getTime() <= now.getTime());
+        reminder.remindAt = next.toISOString();
+        reminder.status = "pending";
+      } else {
+        reminder.status = "sent";
+      }
       this.save();
     }
   }

@@ -15,6 +15,7 @@ import {
   ChatScope,
   GroupMode,
   ReminderItem,
+  ReminderRepeat,
 } from "./store.js";
 
 const execFileAsync = promisify(execFile);
@@ -44,6 +45,7 @@ type ToolAction =
   | "remember"
   | "recall"
   | "reminder"
+  | "list_reminders"
   | "summarize_today"
   | "usage_report"
   | "set_group_mode"
@@ -57,8 +59,15 @@ interface RoutedIntent {
   query?: string;
   remindAt?: string;
   reminderContent?: string;
+  repeat?: ReminderRepeat;
   tags?: string[];
   reason?: string;
+}
+
+interface ParsedReminder {
+  remindAt: Date;
+  content: string;
+  repeat: ReminderRepeat;
 }
 
 interface CompletionResult {
@@ -110,7 +119,11 @@ export class ChatGPTBot {
   };
 
   private get currentDate(): string {
-    return new Date().toISOString().split("T")[0];
+    return this.formatLocalDate(new Date());
+  }
+
+  private get currentDateTime(): string {
+    return this.formatLocalDateTime(new Date());
   }
 
   private get chatgptSystemContent(): string {
@@ -118,6 +131,7 @@ export class ChatGPTBot {
       "你是一个接入微信的 Qwen 系列智能助手。",
       "你的风格自然、温暖、有分寸，像一个可靠的朋友和工具人。",
       "你会记住用户明确交代的重要信息，但不要编造不存在的记忆。",
+      "你支持私聊和群聊定时提醒；不要声称群聊不能定时，除非系统明确报错。",
       "你通过用户配置的模型 API 工作，回复会消耗 token；被问到成本或消耗时要诚实说明，并提示可以查询 token 用量。",
       "在群聊里不要刷屏，不确定是否该说话时保持克制。",
       "回答尽量使用用户的语言，简洁但不要冷冰冰。",
@@ -273,7 +287,20 @@ export class ChatGPTBot {
     text: string,
     context: ChatContext
   ): Promise<string> {
+    const deterministicIntent = this.parseDeterministicToolIntent(text, context);
+    if (deterministicIntent) {
+      return this.handleIntent(deterministicIntent, text, context);
+    }
+
     const intent = await this.routeIntentIfNeeded(text, context);
+    return this.handleIntent(intent, text, context);
+  }
+
+  private async handleIntent(
+    intent: RoutedIntent,
+    text: string,
+    context: ChatContext
+  ): Promise<string> {
     switch (intent.action) {
       case "remember":
         return this.handleRemember(intent, text, context);
@@ -281,6 +308,8 @@ export class ChatGPTBot {
         return this.handleRecall(intent, text, context);
       case "reminder":
         return this.handleReminder(intent, text, context);
+      case "list_reminders":
+        return this.handleListReminders(context);
       case "summarize_today":
         return this.handleSummarizeToday(context);
       case "usage_report":
@@ -342,6 +371,201 @@ export class ChatGPTBot {
     ];
   }
 
+  private parseDeterministicToolIntent(
+    text: string,
+    context: ChatContext
+  ): RoutedIntent | null {
+    const userText = text.split("\n\n用户正在询问最近收到的媒体")[0].trim();
+    const parsedReminder = this.parseReminderRequest(userText);
+    if (parsedReminder) {
+      return {
+        action: "reminder",
+        remindAt: parsedReminder.remindAt.toISOString(),
+        reminderContent: parsedReminder.content,
+        repeat: parsedReminder.repeat,
+      };
+    }
+    if (this.isReminderListRequest(userText, context)) {
+      return { action: "list_reminders" };
+    }
+    return null;
+  }
+
+  private parseReminderRequest(text: string): ParsedReminder | null {
+    if (!this.looksLikeReminderCreateRequest(text)) {
+      return null;
+    }
+    const time = this.parseTimeOfDay(text);
+    if (!time) {
+      return null;
+    }
+
+    const now = new Date();
+    const date = this.parseReminderDate(text, now);
+    const remindAt = new Date(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+      0,
+      0
+    );
+    const repeat: ReminderRepeat = /每天|每日|天天|每一天/.test(text)
+      ? "daily"
+      : "none";
+
+    if (repeat === "daily") {
+      while (remindAt.getTime() <= now.getTime()) {
+        remindAt.setDate(remindAt.getDate() + 1);
+      }
+    } else if (!date.explicit && remindAt.getTime() <= now.getTime()) {
+      remindAt.setDate(remindAt.getDate() + 1);
+    }
+
+    const content = this.extractReminderContent(text);
+    return {
+      remindAt,
+      content: content || "提醒事项",
+      repeat,
+    };
+  }
+
+  private looksLikeReminderCreateRequest(text: string): boolean {
+    const compact = text.replace(/\s+/g, "");
+    const hasReminderCue = /提醒|闹钟|别忘|定时|叫我|喊我|到点|到时候/.test(
+      compact
+    );
+    const hasFutureTaskCue =
+      /(今天|明天|后天|大后天|每天|每日|天天|每一天).*(帮我|能帮我|可以帮我|麻烦|记得|给我)/.test(
+        compact
+      ) && /[点时:：]/.test(compact);
+    return hasReminderCue || hasFutureTaskCue;
+  }
+
+  private isReminderListRequest(text: string, context: ChatContext): boolean {
+    const compact = text.replace(/\s+/g, "");
+    const asksReminder =
+      /提醒/.test(compact) &&
+      /(哪些|什么|列表|还有|有没有|查|查看|为什么|没提醒|没有提醒|忘了吗|忘了|昨天|之前|刚才)/.test(
+        compact
+      );
+    return asksReminder || (context.scope !== "system" && /^#提醒$/.test(compact));
+  }
+
+  private parseReminderDate(text: string, now: Date) {
+    const ymd = text.match(/(20\d{2})[/-](\d{1,2})[/-](\d{1,2})/);
+    if (ymd) {
+      return {
+        year: Number(ymd[1]),
+        month: Number(ymd[2]) - 1,
+        day: Number(ymd[3]),
+        explicit: true,
+      };
+    }
+
+    const md = text.match(
+      /([0-9一二两三四五六七八九十]{1,3})月([0-9一二两三四五六七八九十]{1,3})(?:日|号)?/
+    );
+    if (md) {
+      const month = this.parseChineseNumber(md[1]);
+      const day = this.parseChineseNumber(md[2]);
+      if (month && day) {
+        let year = now.getFullYear();
+        const candidate = new Date(year, month - 1, day);
+        if (candidate.getTime() < this.startOfDay(now).getTime()) {
+          year += 1;
+        }
+        return { year, month: month - 1, day, explicit: true };
+      }
+    }
+
+    let offset = 0;
+    if (/大后天/.test(text)) {
+      offset = 3;
+    } else if (/后天/.test(text)) {
+      offset = 2;
+    } else if (/明天/.test(text)) {
+      offset = 1;
+    }
+    const date = new Date(now);
+    date.setDate(now.getDate() + offset);
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth(),
+      day: date.getDate(),
+      explicit: offset > 0 || /今天/.test(text),
+    };
+  }
+
+  private parseTimeOfDay(text: string): { hour: number; minute: number } | null {
+    const colon = text.match(/([01]?\d|2[0-3])[:：]([0-5]\d)/);
+    if (colon) {
+      return { hour: Number(colon[1]), minute: Number(colon[2]) };
+    }
+
+    const compact = text.replace(/\s+/g, "");
+    const match = compact.match(
+      /(凌晨|早上|上午|中午|下午|晚上|夜里)?([0-9一二两三四五六七八九十两]{1,4})(?:点|时)(半|([0-9一二两三四五六七八九十]{1,3})分?)?/
+    );
+    if (!match) {
+      return null;
+    }
+
+    const period = match[1] || "";
+    const hourValue = this.parseChineseNumber(match[2]);
+    if (hourValue === null || hourValue < 0 || hourValue > 24) {
+      return null;
+    }
+    let hour = hourValue;
+    let minute = 0;
+    if (match[3] === "半") {
+      minute = 30;
+    } else if (match[4]) {
+      const minuteValue = this.parseChineseNumber(match[4]);
+      if (minuteValue === null || minuteValue < 0 || minuteValue > 59) {
+        return null;
+      }
+      minute = minuteValue;
+    }
+
+    if (/下午|晚上|夜里/.test(period) && hour < 12) {
+      hour += 12;
+    } else if (/中午/.test(period) && hour > 0 && hour < 11) {
+      hour += 12;
+    } else if (hour === 24) {
+      hour = 0;
+    }
+    return { hour, minute };
+  }
+
+  private extractReminderContent(text: string): string {
+    let content = text
+      .replace(/(20\d{2})[/-](\d{1,2})[/-](\d{1,2})/g, " ")
+      .replace(
+        /([0-9一二两三四五六七八九十]{1,3})月([0-9一二两三四五六七八九十]{1,3})(?:日|号)?/g,
+        " "
+      )
+      .replace(/每天|每日|天天|每一天|今天|明天|后天|大后天/g, " ")
+      .replace(
+        /(凌晨|早上|上午|中午|下午|晚上|夜里)?([0-9一二两三四五六七八九十两]{1,4})(?:点|时)(半|([0-9一二两三四五六七八九十]{1,3})分?)?/g,
+        " "
+      )
+      .replace(/([01]?\d|2[0-3])[:：]([0-5]\d)/g, " ")
+      .replace(/能不能|可不可以|可以不|可以|能否|能/g, " ")
+      .replace(/帮我|给我|麻烦你|麻烦|请你|请/g, " ")
+      .replace(/设置|设个|定个|定一个|建个|创建/g, " ")
+      .replace(/提醒我|提醒一下我|提醒一下|提醒|闹钟|定时|叫我|喊我|别忘了|别忘|记得/g, " ")
+      .replace(/到时候|到点/g, " ")
+      .replace(/[吗嘛呢吧]$/g, " ")
+      .replace(/[?？!！。,.，]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    content = content.replace(/^(我|一下|一个|一条)+/, "").trim();
+    return content;
+  }
+
   private async routeIntentIfNeeded(
     text: string,
     context: ChatContext
@@ -354,20 +578,23 @@ export class ChatGPTBot {
       "你是微信机器人的工具路由器。请判断用户是否需要调用工具。",
       "不要因为用户没有写命令就拒绝；自然语言也可以触发工具。",
       "只输出 JSON，不要 Markdown。",
-      "action 只能是 chat, remember, recall, reminder, summarize_today, usage_report, set_group_mode, ignore。",
+      "action 只能是 chat, remember, recall, reminder, list_reminders, summarize_today, usage_report, set_group_mode, ignore。",
       "如果用户让你记住、保存、登记信息，使用 remember，并提取 memory。",
       "如果用户询问之前保存的信息，使用 recall，并提取 query。",
-      "如果用户要求提醒，使用 reminder，并给出 remindAt 的 ISO 8601 时间和 reminderContent。",
+      "如果用户要求设置提醒，使用 reminder，并给出 remindAt 的 ISO 8601 时间和 reminderContent；每天/每日提醒时 repeat 为 daily。",
+      "如果用户询问有哪些提醒、为什么没提醒、之前让你提醒过什么，使用 list_reminders。",
       "如果用户要求总结今天/本群/当前对话，使用 summarize_today。",
       "如果用户询问 token、消耗、调用次数，使用 usage_report。",
       "如果群聊用户想调整机器人发言频率，使用 set_group_mode，并给出 mode：quiet、smart 或 active。",
       "quiet 表示少说话、只在被点名时回复；smart 表示正常智能判断；active 表示更主动参与。",
       `当前日期：${this.currentDate}`,
+      `当前时间：${this.currentDateTime}`,
       `会话：${context.chatName}`,
       `会话类型：${context.scope}`,
       `发言人：${context.talkerName}`,
       "示例输出：",
       "{\"action\":\"remember\",\"memory\":\"高数考试是7月10日上午\",\"tags\":[\"考试\"]}",
+      "{\"action\":\"reminder\",\"remindAt\":\"2026-07-05T08:00:00+08:00\",\"reminderContent\":\"交作业\",\"repeat\":\"none\"}",
       "{\"action\":\"set_group_mode\",\"mode\":\"quiet\"}",
     ].join("\n");
 
@@ -422,15 +649,48 @@ export class ChatGPTBot {
     text: string,
     context: ChatContext
   ): string {
-    const remindAt = intent.remindAt;
-    if (!remindAt || Number.isNaN(new Date(remindAt).getTime())) {
+    let remindAt = intent.remindAt ? new Date(intent.remindAt) : null;
+    if (!remindAt || Number.isNaN(remindAt.getTime())) {
       return "我想帮你设提醒，但没能确定具体时间。你可以说得更明确一点，比如“明天上午9点提醒我交作业”。";
     }
+    const repeat: ReminderRepeat = intent.repeat === "daily" ? "daily" : "none";
+    if (repeat === "daily") {
+      while (remindAt.getTime() <= Date.now()) {
+        remindAt.setDate(remindAt.getDate() + 1);
+      }
+    } else if (remindAt.getTime() <= Date.now()) {
+      return "这个提醒时间已经过去了。你可以换一个未来时间，比如“明天上午9点提醒我交作业”。";
+    }
     const content = intent.reminderContent || intent.memory || text;
-    this.store.addReminder(context, remindAt, content);
-    return `好，我会在 ${new Date(remindAt).toLocaleString("zh-CN", {
-      hour12: false,
-    })} 提醒你：${content}`;
+    this.store.addReminder(context, remindAt.toISOString(), content, repeat);
+    const target = context.scope === "group" ? "在本群" : "私聊";
+    const repeatText = repeat === "daily" ? "每天 " : "";
+    return `好，我会${target}${repeatText}${this.formatLocalDateTime(
+      remindAt
+    )} 提醒你：${content}`;
+  }
+
+  private handleListReminders(context: ChatContext): string {
+    const reminders = this.store.getReminders(context.chatId, 12);
+    if (!reminders.length) {
+      return "当前会话里还没有提醒记录。你可以说“明天上午9点提醒我交作业”。";
+    }
+
+    const statusText: Record<ReminderItem["status"], string> = {
+      pending: "待提醒",
+      sent: "已提醒",
+      cancelled: "已取消",
+    };
+    const lines = reminders.map((reminder, index) => {
+      const repeat = reminder.repeat === "daily" ? "每天，" : "";
+      const sent = reminder.lastSentAt
+        ? `；上次提醒：${this.formatLocalDateTime(new Date(reminder.lastSentAt))}`
+        : "";
+      return `${index + 1}. ${statusText[reminder.status]}：${repeat}${this.formatLocalDateTime(
+        new Date(reminder.remindAt)
+      )}，${reminder.content}${sent}`;
+    });
+    return ["当前会话的提醒记录：", ...lines].join("\n");
   }
 
   private async handleSummarizeToday(context: ChatContext): Promise<string> {
@@ -1241,11 +1501,55 @@ export class ChatGPTBot {
         reminder.scope === "group"
           ? weChatBot.Room.load(reminder.chatId)
           : weChatBot.Contact.load(reminder.chatId);
-      await target.say(`提醒：${reminder.content}`);
+      const message = await this.createReminderMessage(reminder);
+      await target.say(message);
       this.store.markReminderSent(reminder.id);
     } catch (error) {
       console.error(`❌ Failed to send reminder ${reminder.id}: ${error}`);
     }
+  }
+
+  private async createReminderMessage(reminder: ReminderItem): Promise<string> {
+    if (!this.shouldGenerateReminderContent(reminder.content)) {
+      return `提醒：${reminder.content}`;
+    }
+    const context: ChatContext = {
+      scope: reminder.scope,
+      chatId: reminder.chatId,
+      chatName: reminder.chatName,
+      talkerId: reminder.createdBy,
+      talkerName: reminder.createdBy,
+    };
+    try {
+      const result = await this.completeChat(
+        [
+          {
+            role: "system",
+            content: [
+              "你正在执行一个微信定时任务。",
+              "如果用户要求写文案、慰问、回复、总结或生成内容，请直接给出可发送的正文。",
+              "不要解释自己是模型，不要说不能定时，不要再反问。",
+              `当前时间：${this.currentDateTime}`,
+            ].join("\n"),
+          },
+          {
+            role: "user",
+            content: `到点了，请执行这个任务：${reminder.content}`,
+          },
+        ],
+        context,
+        "scheduled_task",
+        0.6
+      );
+      return result.text || `提醒：${reminder.content}`;
+    } catch (error) {
+      console.error(`❌ Failed to generate reminder content: ${error}`);
+      return `提醒：${reminder.content}`;
+    }
+  }
+
+  private shouldGenerateReminderContent(content: string): boolean {
+    return /写|生成|起草|拟|文案|慰问|回复|总结/.test(content);
   }
 
   private parseIntent(raw: string): RoutedIntent {
@@ -1271,6 +1575,7 @@ export class ChatGPTBot {
       "remember",
       "recall",
       "reminder",
+      "list_reminders",
       "summarize_today",
       "usage_report",
       "set_group_mode",
@@ -1284,7 +1589,7 @@ export class ChatGPTBot {
 
   private mayNeedTool(text: string, context?: ChatContext): boolean {
     return (
-      /记住|记一下|保存|存一下|提醒|闹钟|别忘|总结|复盘|消耗|token|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业/i.test(
+      /记住|记一下|保存|存一下|提醒|闹钟|别忘|定时|总结|复盘|消耗|token|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业/i.test(
         text
       ) ||
       (context?.scope === "group" && this.looksLikeModeSwitchRequest(text))
@@ -1392,6 +1697,61 @@ export class ChatGPTBot {
       active: "活跃模式：会更积极参与，但仍有冷却时间避免刷屏",
     };
     return descriptions[mode];
+  }
+
+  private parseChineseNumber(text: string): number | null {
+    if (/^\d+$/.test(text)) {
+      return Number(text);
+    }
+    const digits: Record<string, number> = {
+      零: 0,
+      〇: 0,
+      一: 1,
+      二: 2,
+      两: 2,
+      三: 3,
+      四: 4,
+      五: 5,
+      六: 6,
+      七: 7,
+      八: 8,
+      九: 9,
+    };
+    if (text === "十") {
+      return 10;
+    }
+    const tenIndex = text.indexOf("十");
+    if (tenIndex >= 0) {
+      const tensText = text.slice(0, tenIndex);
+      const onesText = text.slice(tenIndex + 1);
+      const tens = tensText ? digits[tensText] : 1;
+      const ones = onesText ? digits[onesText] : 0;
+      if (tens === undefined || ones === undefined) {
+        return null;
+      }
+      return tens * 10 + ones;
+    }
+    if (text.length === 1 && digits[text] !== undefined) {
+      return digits[text];
+    }
+    return null;
+  }
+
+  private startOfDay(date: Date): Date {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+
+  private formatLocalDate(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  private formatLocalDateTime(date: Date): string {
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return `${this.formatLocalDate(date)} ${hours}:${minutes}`;
   }
 
   private estimateTokens(text: string): number {
