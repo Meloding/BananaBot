@@ -18,6 +18,7 @@ else {
     openaiOrganizationID: process.env.OPENAI_ORGANIZATION_KEY,
     openaiBasePath: process.env.OPENAI_BASE_PATH,
     openaiModel: process.env.OPENAI_MODEL,
+    agentModel: process.env.AGENT_MODEL,
     chatgptTriggerKeyword: process.env.CHATGPT_TRIGGER_KEYWORD,
     privateAutoReply: process.env.PRIVATE_AUTO_REPLY,
     defaultGroupMode: process.env.DEFAULT_GROUP_MODE,
@@ -33,6 +34,7 @@ else {
     replyMaxSegments: process.env.REPLY_MAX_SEGMENTS,
     stripMarkdown: process.env.STRIP_MARKDOWN,
     allowGlobalUsageReport: process.env.ALLOW_GLOBAL_USAGE_REPORT,
+    generatedFilesPath: process.env.GENERATED_FILES_PATH,
   };
 }
 
@@ -58,6 +60,7 @@ export const Config: IConfig = {
   openaiOrganizationID: configFile.openaiOrganizationID || "",
   openaiBasePath: configFile.openaiBasePath || "",
   openaiModel: configFile.openaiModel || "qwen-plus",
+  agentModel: configFile.agentModel || "qwen-turbo",
   chatgptTriggerKeyword: configFile.chatgptTriggerKeyword || "",
   privateAutoReply: parseBoolean(configFile.privateAutoReply, true),
   defaultGroupMode: configFile.defaultGroupMode || "smart",
@@ -73,4 +76,5 @@ export const Config: IConfig = {
   replyMaxSegments: Number(configFile.replyMaxSegments || 8),
   stripMarkdown: parseBoolean(configFile.stripMarkdown, true),
   allowGlobalUsageReport: parseBoolean(configFile.allowGlobalUsageReport, false),
+  generatedFilesPath: configFile.generatedFilesPath || "./data/generated",
 };

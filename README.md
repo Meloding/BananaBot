@@ -186,6 +186,7 @@ openaiApiKey: ""
 openaiOrganizationID: ""
 openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 openaiModel: "qwen-plus"
+agentModel: "qwen-turbo"
 chatgptTriggerKeyword: "Hi bot:"
 
 privateAutoReply: true
@@ -206,6 +207,7 @@ replyMaxSegments: 8
 stripMarkdown: true
 
 allowGlobalUsageReport: false
+generatedFilesPath: "./data/generated"
 ```
 
 字段说明：
@@ -215,6 +217,7 @@ allowGlobalUsageReport: false
 | `openaiApiKey` | 百炼 / DashScope API Key |
 | `openaiBasePath` | OpenAI 兼容模式地址 |
 | `openaiModel` | 普通聊天模型，默认 `qwen-plus` |
+| `agentModel` | 工具路由和复杂任务模型，默认 `qwen-turbo` |
 | `chatgptTriggerKeyword` | 兼容旧触发词；私聊默认不需要 |
 | `privateAutoReply` | 私聊是否自动回复所有文本 |
 | `defaultGroupMode` | 群聊默认模式：`quiet` / `smart` / `active` |
@@ -230,6 +233,7 @@ allowGlobalUsageReport: false
 | `replyMaxSegments` | 一次回复最多拆分几条 |
 | `stripMarkdown` | 发送微信前是否移除 Markdown 标记 |
 | `allowGlobalUsageReport` | 私聊中是否允许查看全局 token 用量 |
+| `generatedFilesPath` | agent 生成文件的保存目录 |
 
 ## 运行和维护
 
@@ -437,6 +441,8 @@ apt-get install -y ffmpeg
 
 工具不是靠固定命令触发。提醒、查提醒、群模式切换这类基础能力会先走代码里的确定性解析；更模糊的意图再交给 LLM 路由判断。
 
+普通聊天继续使用 `openaiModel`。复杂任务和工具路由默认使用更便宜的 `agentModel`，避免每条消息都消耗聊天主模型。
+
 支持的动作：
 
 - `chat`：普通聊天
@@ -444,6 +450,7 @@ apt-get install -y ffmpeg
 - `recall`：查询当前会话记忆
 - `reminder`：设置提醒
 - `list_reminders`：查询当前会话提醒记录
+- `agent_task`：复杂任务，包括日程文档、文件生成、代码执行确认
 - `summarize_today`：总结当天当前会话
 - `usage_report`：查询当前会话 token 用量
 - `ignore`：判断不需要回复
@@ -457,9 +464,36 @@ apt-get install -y ffmpeg
 每天中午十一点半提醒我点外卖
 明天早上8点帮我给她写一个暖心慰问
 我昨天让你提醒我点外卖，你忘了吗？
+帮我把这周的考试和作业整理成日程表
+帮我生成一份 Markdown 复习计划文件
+帮我运行这段 Python 代码
 总结一下今天群里讨论的重点
 今天这个群消耗了多少 token？
 ```
+
+### Agent 能力
+
+当前版本是内置轻量 agent 层，不会让所有消息都进入 agent：
+
+- 普通聊天：直接用 `openaiModel` 回复。
+- 快速工具：提醒、查提醒、记忆、群模式、token 查询由代码直接处理。
+- 复杂任务：使用 `agentModel` 规划和生成结果。
+
+已支持的复杂任务：
+
+- 日程表：`帮我把这周考试和作业整理成日程表`
+- 文件生成：`帮我生成一份 Markdown 复习计划文件`
+- 代码执行：`帮我运行这段 Python 代码`
+- 任务规划：`帮我把这个需求拆成步骤`
+
+文件会保存到 `generatedFilesPath`，并通过微信发回当前私聊或群聊。代码执行属于高风险任务，机器人会先要求确认：
+
+```text
+#确认执行
+#取消
+```
+
+代码运行只支持临时 Python / JavaScript 文件，使用超时和输出截断，不通过 shell 执行。
 
 ### 提醒能力
 

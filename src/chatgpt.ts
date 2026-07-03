@@ -6,6 +6,7 @@ import os from "os";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { FileBox } from "file-box";
 import { Message } from "wechaty";
 import { ContactInterface, RoomInterface } from "wechaty/impls";
 import { Configuration, OpenAIApi } from "openai";
@@ -46,6 +47,7 @@ type ToolAction =
   | "recall"
   | "reminder"
   | "list_reminders"
+  | "agent_task"
   | "summarize_today"
   | "usage_report"
   | "set_group_mode"
@@ -54,6 +56,12 @@ type ToolAction =
 interface RoutedIntent {
   action: ToolAction;
   mode?: GroupMode;
+  agentTool?: AgentToolName;
+  risk?: AgentRisk;
+  code?: string;
+  codeLanguage?: string;
+  fileType?: string;
+  title?: string;
   reply?: string;
   memory?: string;
   query?: string;
@@ -68,6 +76,22 @@ interface ParsedReminder {
   remindAt: Date;
   content: string;
   repeat: ReminderRepeat;
+}
+
+type AgentToolName =
+  | "schedule_document"
+  | "file_create"
+  | "code_run"
+  | "plan_only";
+
+type AgentRisk = "low" | "medium" | "high";
+
+interface PendingApproval {
+  id: string;
+  createdAt: number;
+  context: ChatContext;
+  intent: RoutedIntent;
+  originalText: string;
 }
 
 interface CompletionResult {
@@ -110,8 +134,11 @@ export class ChatGPTBot {
   private reminderLoopStarted = false;
   private lastGroupReplyAt: Map<string, number> = new Map();
   private pendingMediaByChat: Map<string, PendingMediaMessage[]> = new Map();
+  private pendingApprovals: Map<string, PendingApproval> = new Map();
+  private pendingFilesByChat: Map<string, string[]> = new Map();
   private readonly pendingMediaTtlMs = 10 * 60 * 1000;
   private readonly pendingMediaLimit = 6;
+  private readonly pendingApprovalTtlMs = 10 * 60 * 1000;
 
   private chatgptModelConfig: object = {
     model: Config.openaiModel,
@@ -256,6 +283,22 @@ export class ChatGPTBot {
     }
 
     const cleanText = this.cleanMessage(rawText, context).trim();
+    const approvalReply = await this.handlePendingApprovalReply(
+      cleanText || rawText,
+      context
+    );
+    if (approvalReply) {
+      const sentMessage = await this.replyToContext(message, context, approvalReply);
+      await this.sendPendingFiles(message, context);
+      this.store.addMessage({
+        ...context,
+        role: "assistant",
+        text: sentMessage,
+        messageType: MessageType.Text,
+      });
+      return;
+    }
+
     const mediaContext = await this.consumeReferencedMediaIfNeeded(
       cleanText || rawText,
       context
@@ -275,6 +318,7 @@ export class ChatGPTBot {
     }
 
     const sentMessage = await this.replyToContext(message, context, replyMessage);
+    await this.sendPendingFiles(message, context);
     this.store.addMessage({
       ...context,
       role: "assistant",
@@ -310,6 +354,8 @@ export class ChatGPTBot {
         return this.handleReminder(intent, text, context);
       case "list_reminders":
         return this.handleListReminders(context);
+      case "agent_task":
+        return this.handleAgentTask(intent, text, context);
       case "summarize_today":
         return this.handleSummarizeToday(context);
       case "usage_report":
@@ -387,6 +433,53 @@ export class ChatGPTBot {
     }
     if (this.isReminderListRequest(userText, context)) {
       return { action: "list_reminders" };
+    }
+    const agentIntent = this.parseDeterministicAgentIntent(userText);
+    if (agentIntent) {
+      return agentIntent;
+    }
+    return null;
+  }
+
+  private parseDeterministicAgentIntent(text: string): RoutedIntent | null {
+    const compact = text.replace(/\s+/g, "");
+    if (/跑(一下)?代码|执行(一下)?代码|运行(一下)?代码|code|python|javascript|node/i.test(compact)) {
+      return {
+        action: "agent_task",
+        agentTool: "code_run",
+        code: this.extractCodeBlock(text),
+        codeLanguage: this.inferCodeLanguage(text),
+        risk: "high",
+      };
+    }
+    if (/日程表|计划表|复习计划|考试安排表|ddl表|待办表|整理成.*表|生成.*表格/i.test(compact)) {
+      return {
+        action: "agent_task",
+        agentTool: "schedule_document",
+        fileType: /csv|表格|excel|xlsx/i.test(text) ? "csv" : "md",
+        title: "日程计划",
+        risk: "medium",
+      };
+    }
+    if (/生成.*(文件|文档|报告|markdown|md|txt|csv)|写一份.*(文档|报告)|导出.*(文件|文档)/i.test(compact)) {
+      return {
+        action: "agent_task",
+        agentTool: "file_create",
+        fileType: /csv|表格|excel|xlsx/i.test(text)
+          ? "csv"
+          : /txt|文本/i.test(text)
+          ? "txt"
+          : "md",
+        title: this.extractTitle(text) || "生成文档",
+        risk: "medium",
+      };
+    }
+    if (/分步骤|计划一下|拆解任务|帮我规划/i.test(compact)) {
+      return {
+        action: "agent_task",
+        agentTool: "plan_only",
+        risk: "low",
+      };
     }
     return null;
   }
@@ -578,11 +671,13 @@ export class ChatGPTBot {
       "你是微信机器人的工具路由器。请判断用户是否需要调用工具。",
       "不要因为用户没有写命令就拒绝；自然语言也可以触发工具。",
       "只输出 JSON，不要 Markdown。",
-      "action 只能是 chat, remember, recall, reminder, list_reminders, summarize_today, usage_report, set_group_mode, ignore。",
+      "action 只能是 chat, remember, recall, reminder, list_reminders, agent_task, summarize_today, usage_report, set_group_mode, ignore。",
       "如果用户让你记住、保存、登记信息，使用 remember，并提取 memory。",
       "如果用户询问之前保存的信息，使用 recall，并提取 query。",
       "如果用户要求设置提醒，使用 reminder，并给出 remindAt 的 ISO 8601 时间和 reminderContent；每天/每日提醒时 repeat 为 daily。",
       "如果用户询问有哪些提醒、为什么没提醒、之前让你提醒过什么，使用 list_reminders。",
+      "如果用户要求生成文件、整理日程表、执行代码、做多步骤规划，使用 agent_task。",
+      "agent_task 需要给出 agentTool：schedule_document、file_create、code_run 或 plan_only；执行代码 risk 为 high。",
       "如果用户要求总结今天/本群/当前对话，使用 summarize_today。",
       "如果用户询问 token、消耗、调用次数，使用 usage_report。",
       "如果群聊用户想调整机器人发言频率，使用 set_group_mode，并给出 mode：quiet、smart 或 active。",
@@ -595,6 +690,7 @@ export class ChatGPTBot {
       "示例输出：",
       "{\"action\":\"remember\",\"memory\":\"高数考试是7月10日上午\",\"tags\":[\"考试\"]}",
       "{\"action\":\"reminder\",\"remindAt\":\"2026-07-05T08:00:00+08:00\",\"reminderContent\":\"交作业\",\"repeat\":\"none\"}",
+      "{\"action\":\"agent_task\",\"agentTool\":\"schedule_document\",\"fileType\":\"md\",\"risk\":\"medium\"}",
       "{\"action\":\"set_group_mode\",\"mode\":\"quiet\"}",
     ].join("\n");
 
@@ -606,7 +702,8 @@ export class ChatGPTBot {
         ],
         context,
         "router",
-        0.1
+        0.1,
+        Config.agentModel
       );
       return this.parseIntent(result.text);
     } catch (e: any) {
@@ -746,6 +843,352 @@ export class ChatGPTBot {
     }
     this.store.setGroupMode(context.chatId, context.chatName, mode);
     return `已切换：${this.describeGroupMode(mode)}`;
+  }
+
+  private async handleAgentTask(
+    intent: RoutedIntent,
+    text: string,
+    context: ChatContext
+  ): Promise<string> {
+    const tool = intent.agentTool || this.inferAgentTool(text);
+    if (this.requiresConfirmation(intent, tool)) {
+      const approval = this.createPendingApproval(intent, text, context, tool);
+      return [
+        `这个任务需要确认后执行：${this.describeAgentTool(tool)}`,
+        `风险等级：${intent.risk || "high"}`,
+        "请回复 #确认执行 继续，或回复 #取消 放弃。",
+        `确认编号：${approval.id}`,
+      ].join("\n");
+    }
+
+    if (tool === "schedule_document") {
+      return this.createScheduleDocument(text, context, intent.fileType || "md");
+    }
+    if (tool === "file_create") {
+      return this.createAgentDocument(text, context, intent.fileType || "md");
+    }
+    if (tool === "plan_only") {
+      return this.createAgentPlan(text, context);
+    }
+    if (tool === "code_run") {
+      return "执行代码属于高风险操作，需要回复 #确认执行 后才会运行。";
+    }
+    return this.createAgentPlan(text, context);
+  }
+
+  private async createScheduleDocument(
+    text: string,
+    context: ChatContext,
+    fileType: string
+  ): Promise<string> {
+    const source = this.buildAgentContext(context, 160);
+    const result = await this.completeChat(
+      [
+        {
+          role: "system",
+          content: [
+            "你是日程整理 agent。",
+            "请根据当前会话历史和记忆，整理考试、作业、DDL、提醒、待办。",
+            "只使用给定材料，不要编造日期；不确定的时间标为待确认。",
+            fileType === "csv"
+              ? "输出 CSV 内容，第一行表头为：类型,事项,时间,地点,状态,备注。"
+              : "输出 Markdown，包含总览、日程表、待确认信息、建议行动。",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [`用户请求：${text}`, "", "材料：", source].join("\n"),
+        },
+      ],
+      context,
+      "agent_schedule_document",
+      0.2,
+      Config.agentModel
+    );
+    const extension = fileType === "csv" ? "csv" : "md";
+    const filePath = this.writeGeneratedFile(
+      context,
+      "schedule",
+      extension,
+      result.text
+    );
+    this.queueFileForChat(context.chatId, filePath);
+    return `我整理好日程表了，已生成文件：${path.basename(filePath)}`;
+  }
+
+  private async createAgentDocument(
+    text: string,
+    context: ChatContext,
+    fileType: string
+  ): Promise<string> {
+    const source = this.buildAgentContext(context, 120);
+    const result = await this.completeChat(
+      [
+        {
+          role: "system",
+          content: [
+            "你是文件生成 agent。",
+            "请根据用户请求生成一份可直接保存的内容。",
+            "如果材料不足，先给出合理模板，并标注需要用户补充的部分。",
+            fileType === "csv"
+              ? "输出 CSV 内容，不要 Markdown 代码块。"
+              : "输出 Markdown 正文，不要外层代码块。",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [`用户请求：${text}`, "", "可参考的当前会话材料：", source].join(
+            "\n"
+          ),
+        },
+      ],
+      context,
+      "agent_file_create",
+      0.4,
+      Config.agentModel
+    );
+    const extension = ["csv", "txt"].includes(fileType) ? fileType : "md";
+    const filePath = this.writeGeneratedFile(
+      context,
+      "document",
+      extension,
+      result.text
+    );
+    this.queueFileForChat(context.chatId, filePath);
+    return `文件已生成：${path.basename(filePath)}`;
+  }
+
+  private async createAgentPlan(text: string, context: ChatContext): Promise<string> {
+    const result = await this.completeChat(
+      [
+        {
+          role: "system",
+          content: [
+            "你是任务规划 agent。",
+            "请把用户的需求拆成清晰步骤，指出需要哪些工具、哪些权限、哪些信息缺口。",
+            "不要假装已经执行工具；只给计划和下一步建议。",
+          ].join("\n"),
+        },
+        { role: "user", content: text },
+      ],
+      context,
+      "agent_plan",
+      0.3,
+      Config.agentModel
+    );
+    return result.text;
+  }
+
+  private async handlePendingApprovalReply(
+    text: string,
+    context: ChatContext
+  ): Promise<string | null> {
+    this.prunePendingApprovals();
+    const compact = text.replace(/\s+/g, "");
+    const approval = this.pendingApprovals.get(context.chatId);
+    if (!approval) {
+      return null;
+    }
+    if (/^#?(取消|放弃|不执行|cancel)$/i.test(compact)) {
+      this.pendingApprovals.delete(context.chatId);
+      return "已取消这个待确认任务。";
+    }
+    if (!/^#?(确认执行|确认|执行|yes|ok)$/i.test(compact)) {
+      return null;
+    }
+    this.pendingApprovals.delete(context.chatId);
+    return this.executeApprovedAgentTask(approval);
+  }
+
+  private async executeApprovedAgentTask(
+    approval: PendingApproval
+  ): Promise<string> {
+    const tool = approval.intent.agentTool || this.inferAgentTool(approval.originalText);
+    if (tool === "code_run") {
+      return this.runCodeTask(approval.intent, approval.originalText, approval.context);
+    }
+    return this.handleAgentTask(
+      {
+        ...approval.intent,
+        risk: "medium",
+      },
+      approval.originalText,
+      approval.context
+    );
+  }
+
+  private async runCodeTask(
+    intent: RoutedIntent,
+    text: string,
+    context: ChatContext
+  ): Promise<string> {
+    const code = intent.code || this.extractCodeBlock(text);
+    if (!code) {
+      return "我没有找到可执行的代码。请用 Markdown 代码块发送，例如 ```python ... ```。";
+    }
+    const language = intent.codeLanguage || this.inferCodeLanguage(text);
+    const runner =
+      language === "javascript" || language === "node"
+        ? { command: process.execPath, extension: "js" }
+        : { command: "python3", extension: "py" };
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-agent-code-"));
+    const codePath = path.join(tempDir, `task.${runner.extension}`);
+    fs.writeFileSync(codePath, code, "utf8");
+    try {
+      const result = await execFileAsync(runner.command, [codePath], {
+        timeout: 8000,
+        maxBuffer: 80 * 1024,
+      });
+      const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const clipped = output.slice(0, 2500) || "代码执行完成，没有输出。";
+      this.store.addUsage({
+        scope: context.scope,
+        chatId: context.chatId,
+        chatName: context.chatName,
+        model: "local-code-runner",
+        feature: "agent_code_run",
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        estimated: true,
+      });
+      return [`代码执行完成：`, clipped].join("\n");
+    } catch (error: any) {
+      const stderr = error?.stderr || error?.message || String(error);
+      return `代码执行失败：${String(stderr).slice(0, 1800)}`;
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  private requiresConfirmation(intent: RoutedIntent, tool: AgentToolName): boolean {
+    return tool === "code_run" || intent.risk === "high";
+  }
+
+  private createPendingApproval(
+    intent: RoutedIntent,
+    text: string,
+    context: ChatContext,
+    tool: AgentToolName
+  ): PendingApproval {
+    const approval: PendingApproval = {
+      id: `appr_${Date.now().toString(36)}`,
+      createdAt: Date.now(),
+      context,
+      intent: {
+        ...intent,
+        agentTool: tool,
+      },
+      originalText: text,
+    };
+    this.pendingApprovals.set(context.chatId, approval);
+    return approval;
+  }
+
+  private prunePendingApprovals() {
+    const now = Date.now();
+    for (const [chatId, approval] of this.pendingApprovals.entries()) {
+      if (now - approval.createdAt > this.pendingApprovalTtlMs) {
+        this.pendingApprovals.delete(chatId);
+      }
+    }
+  }
+
+  private inferAgentTool(text: string): AgentToolName {
+    const compact = text.replace(/\s+/g, "");
+    if (/代码|python|javascript|node|运行|执行/.test(compact)) {
+      return "code_run";
+    }
+    if (/日程|计划表|考试|ddl|待办表/.test(compact)) {
+      return "schedule_document";
+    }
+    if (/文件|文档|报告|表格|markdown|md|txt|csv/.test(compact)) {
+      return "file_create";
+    }
+    return "plan_only";
+  }
+
+  private describeAgentTool(tool: AgentToolName): string {
+    const descriptions: Record<AgentToolName, string> = {
+      schedule_document: "整理日程/待办并生成文件",
+      file_create: "生成文档文件",
+      code_run: "执行用户提供的代码",
+      plan_only: "规划复杂任务",
+    };
+    return descriptions[tool];
+  }
+
+  private extractCodeBlock(text: string): string {
+    const fenced = text.match(/```(?:python|py|javascript|js|node)?\s*([\s\S]*?)```/i);
+    if (fenced) {
+      return fenced[1].trim();
+    }
+    const lines = text.split("\n");
+    if (lines.length > 1) {
+      return lines.slice(1).join("\n").trim();
+    }
+    return "";
+  }
+
+  private inferCodeLanguage(text: string): string {
+    if (/```(?:javascript|js|node)/i.test(text) || /javascript|node\.?js|js/i.test(text)) {
+      return "javascript";
+    }
+    return "python";
+  }
+
+  private extractTitle(text: string): string {
+    const quoted = text.match(/[“"]([^”"]{2,40})[”"]/);
+    if (quoted) {
+      return quoted[1];
+    }
+    const title = text
+      .replace(/帮我|生成|创建|写一份|写一个|导出|文件|文档|报告/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return title.slice(0, 24);
+  }
+
+  private buildAgentContext(context: ChatContext, limit: number): string {
+    const memories = this.store
+      .searchMemories(context, "", 20)
+      .map((memory) => `记忆：${memory.content}`);
+    const messages = this.store
+      .getRecentMessages(context.chatId, limit)
+      .map((message) => `${message.talkerName}[${message.role}]: ${message.text}`);
+    return [...memories, ...messages].slice(-limit).join("\n") || "暂无材料。";
+  }
+
+  private writeGeneratedFile(
+    context: ChatContext,
+    prefix: string,
+    extension: string,
+    content: string
+  ): string {
+    fs.mkdirSync(Config.generatedFilesPath, { recursive: true });
+    const safeChat = context.chatName.replace(/[^\w\u4e00-\u9fa5-]+/g, "_").slice(0, 24);
+    const timestamp = this.formatLocalDateTime(new Date())
+      .replace(/[-: ]/g, "")
+      .slice(0, 12);
+    const filePath = path.join(
+      Config.generatedFilesPath,
+      `${prefix}_${safeChat}_${timestamp}.${extension}`
+    );
+    fs.writeFileSync(filePath, this.stripCodeFence(content), "utf8");
+    return filePath;
+  }
+
+  private stripCodeFence(content: string): string {
+    return content
+      .replace(/^```[a-zA-Z0-9_-]*\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+  }
+
+  private queueFileForChat(chatId: string, filePath: string) {
+    const files = this.pendingFilesByChat.get(chatId) || [];
+    files.push(filePath);
+    this.pendingFilesByChat.set(chatId, files);
   }
 
   private async completeChat(
@@ -1313,6 +1756,9 @@ export class ChatGPTBot {
   }
 
   private shouldRespond(text: string, context: ChatContext): boolean {
+    if (this.pendingApprovals.has(context.chatId) && this.isApprovalReplyText(text)) {
+      return true;
+    }
     if (context.scope === "private") {
       return Config.privateAutoReply || this.startsWithTrigger(text);
     }
@@ -1420,6 +1866,22 @@ export class ChatGPTBot {
     }
     await this.reply(message.talker(), preparedText);
     return preparedText;
+  }
+
+  private async sendPendingFiles(message: Message, context: ChatContext) {
+    const files = this.pendingFilesByChat.get(context.chatId) || [];
+    if (!files.length) {
+      return;
+    }
+    this.pendingFilesByChat.delete(context.chatId);
+    const room = message.room();
+    const target = context.scope === "group" && room ? room : message.talker();
+    for (const filePath of files) {
+      if (!fs.existsSync(filePath)) {
+        continue;
+      }
+      await target.say(FileBox.fromFile(filePath));
+    }
   }
 
   private async reply(
@@ -1576,6 +2038,7 @@ export class ChatGPTBot {
       "recall",
       "reminder",
       "list_reminders",
+      "agent_task",
       "summarize_today",
       "usage_report",
       "set_group_mode",
@@ -1589,7 +2052,7 @@ export class ChatGPTBot {
 
   private mayNeedTool(text: string, context?: ChatContext): boolean {
     return (
-      /记住|记一下|保存|存一下|提醒|闹钟|别忘|定时|总结|复盘|消耗|token|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业/i.test(
+      /记住|记一下|保存|存一下|提醒|闹钟|别忘|定时|总结|复盘|消耗|token|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业|日程表|计划表|文件|文档|表格|报告|执行代码|运行代码|跑代码|python|javascript|node/i.test(
         text
       ) ||
       (context?.scope === "group" && this.looksLikeModeSwitchRequest(text))
@@ -1599,6 +2062,13 @@ export class ChatGPTBot {
   private startsWithTrigger(text: string): boolean {
     return Boolean(
       this.chatgptTriggerKeyword && text.startsWith(this.chatgptTriggerKeyword)
+    );
+  }
+
+  private isApprovalReplyText(text: string): boolean {
+    const compact = text.replace(/\s+/g, "");
+    return /^#?(确认执行|确认|执行|取消|放弃|不执行|yes|ok|cancel)$/i.test(
+      compact
     );
   }
 

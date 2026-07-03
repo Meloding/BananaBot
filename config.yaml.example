@@ -2,6 +2,7 @@ openaiApiKey: ""
 openaiOrganizationID: ""
 openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 openaiModel: "qwen-plus"
+agentModel: "qwen-turbo"
 chatgptTriggerKeyword: "Hi bot:"
 privateAutoReply: true
 defaultGroupMode: "smart"
@@ -17,3 +18,4 @@ replyMaxLength: 500
 replyMaxSegments: 8
 stripMarkdown: true
 allowGlobalUsageReport: false
+generatedFilesPath: "./data/generated"

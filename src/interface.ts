@@ -3,6 +3,7 @@ export interface IConfig {
   openaiOrganizationID?: string;
   openaiBasePath?: string;
   openaiModel: string;
+  agentModel: string;
   chatgptTriggerKeyword: string;
   privateAutoReply: boolean;
   defaultGroupMode: "quiet" | "smart" | "active";
@@ -18,4 +19,5 @@ export interface IConfig {
   replyMaxSegments: number;
   stripMarkdown: boolean;
   allowGlobalUsageReport: boolean;
+  generatedFilesPath: string;
 }
