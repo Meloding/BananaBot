@@ -195,6 +195,11 @@ defaultGroupMode: "smart"
 botDataPath: "./data/bot-store.json"
 historyMessageLimit: 12
 agentRouterEnabled: true
+rootAuthToken: ""
+ignoreOfficialAccounts: true
+activeGroupCooldownSeconds: 30
+reminderFollowupIntervalMinutes: 5
+debugMessageTypes: true
 
 multimodalEnabled: true
 visionModel: "qwen-vl-plus"
@@ -224,6 +229,11 @@ generatedFilesPath: "./data/generated"
 | `botDataPath` | 本地数据文件 |
 | `historyMessageLimit` | 每次对话带入的最近消息条数 |
 | `agentRouterEnabled` | 是否启用 LLM 工具路由 |
+| `rootAuthToken` | root 授权长串，留空则关闭 root 自助授权 |
+| `ignoreOfficialAccounts` | 是否默认忽略公众号消息 |
+| `activeGroupCooldownSeconds` | 群聊活跃模式冷却秒数 |
+| `reminderFollowupIntervalMinutes` | 连续提醒多次时的间隔分钟数 |
+| `debugMessageTypes` | 是否在日志输出微信消息类型 |
 | `multimodalEnabled` | 是否启用多模态 |
 | `visionModel` | 图片/视频帧理解模型 |
 | `audioModel` | 语音转写模型 |
@@ -374,6 +384,8 @@ systemctl restart chatgpt-on-wechat.service
 
 也就是说，单纯乱发图片不会消耗 `visionModel`。机器人只会在当前群缓存最近几条媒体一小段时间，等有人明确问“这张图/刚才的视频/这条语音”时再调用模型。
 
+群里有人先发图、表情包、语音或视频，另一个人再 @ 机器人追问，也会使用当前群最近缓存的媒体，不要求必须同一个人连续提问。
+
 ## 多模态能力
 
 ### 图片
@@ -507,10 +519,36 @@ apt-get install -y ffmpeg
 
 - 一次性提醒：`明天上午9点提醒我交作业`
 - 每日重复提醒：`每天中午十一点半提醒我点外卖`
+- 连续多次提醒：`明天傍晚五点半连续提醒我两次写作业`
 - 到点生成内容：`明天早上8点帮我写一段暖心慰问`
 - 查询提醒：`我有哪些提醒？`、`我昨天让你提醒我点外卖，你忘了吗？`
 
 简单提醒到点会直接发送 `提醒：...`。如果提醒内容明显是“写文案、生成慰问、起草回复、总结”等任务，到点时会先调用模型生成正文，再发到对应会话。
+
+### Root 和白名单
+
+在 `config.yaml` 里设置一个足够长的 `rootAuthToken` 后，任意私聊或群聊里发送这个长串，即可把发送者加入 root：
+
+```text
+your-long-root-token
+```
+
+root 支持：
+
+```text
+#root帮助
+#好友列表
+#群列表
+#会话列表
+#白名单
+#允许 3
+#禁止 3
+#总结 3
+```
+
+默认好友和群都允许聊天；root 可以用 `#禁止 编号` 关闭某个好友或群的回复，用 `#允许 编号` 恢复。编号来自最近一次 `#好友列表`、`#群列表` 或 `#会话列表`。
+
+公众号消息默认不回复，避免订阅号推送消耗 token。
 
 ## 数据文件
 
@@ -527,8 +565,13 @@ apt-get install -y ffmpeg
 - `reminders`：提醒
 - `usageRecords`：token 用量
 - `groupSettings`：群聊模式
+- `rootUsers`：root 用户
+- `chatAccess`：白名单/黑名单规则
+- `knownChats`：已见过的私聊和群聊索引
 
 `data/` 已加入 `.gitignore`，不会提交到仓库。
+
+消息记录会按会话保留最近一批，并有全局上限；模型上下文仍只取 `historyMessageLimit` 条最近消息，避免聊天记录无限增长导致每次对话越来越贵。
 
 建议定期备份：
 

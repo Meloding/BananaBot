@@ -4,6 +4,7 @@ import path from "path";
 export type ChatScope = "private" | "group";
 export type GroupMode = "quiet" | "smart" | "active";
 export type ReminderRepeat = "none" | "daily";
+export type ChatAccessStatus = "allow" | "deny";
 
 export interface ChatContext {
   scope: ChatScope | "system";
@@ -24,6 +25,13 @@ export interface StoredMessage {
   role: "user" | "assistant";
   text: string;
   messageType?: number;
+}
+
+export interface KnownChat {
+  scope: ChatScope;
+  chatId: string;
+  chatName: string;
+  lastSeenAt: string;
 }
 
 export interface MemoryItem {
@@ -49,6 +57,15 @@ export interface ReminderItem {
   repeat?: ReminderRepeat;
   lastSentAt?: string;
   status: "pending" | "sent" | "cancelled";
+}
+
+export interface ChatAccessRule {
+  scope: ChatScope;
+  chatId: string;
+  chatName: string;
+  status: ChatAccessStatus;
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export interface UsageRecord {
@@ -79,6 +96,9 @@ interface BotData {
   reminders: ReminderItem[];
   usageRecords: UsageRecord[];
   groupSettings: Record<string, GroupSetting>;
+  rootUsers: Record<string, string>;
+  chatAccess: Record<string, ChatAccessRule>;
+  knownChats: Record<string, KnownChat>;
 }
 
 const emptyData = (): BotData => ({
@@ -87,6 +107,9 @@ const emptyData = (): BotData => ({
   reminders: [],
   usageRecords: [],
   groupSettings: {},
+  rootUsers: {},
+  chatAccess: {},
+  knownChats: {},
 });
 
 export class BotStore {
@@ -97,13 +120,38 @@ export class BotStore {
   }
 
   addMessage(message: Omit<StoredMessage, "id" | "timestamp"> & { timestamp?: string }) {
+    const timestamp = message.timestamp || new Date().toISOString();
     this.data.messages.push({
       id: this.createId("msg"),
-      timestamp: message.timestamp || new Date().toISOString(),
+      timestamp,
       ...message,
     });
+    this.rememberChat(message.scope, message.chatId, message.chatName, timestamp);
     this.trimMessages();
     this.save();
+  }
+
+  rememberChat(
+    scope: ChatScope | "system",
+    chatId: string,
+    chatName: string,
+    lastSeenAt = new Date().toISOString()
+  ) {
+    if (scope === "system") {
+      return;
+    }
+    this.data.knownChats[chatId] = {
+      scope,
+      chatId,
+      chatName,
+      lastSeenAt,
+    };
+  }
+
+  getKnownChats(scope?: ChatScope): KnownChat[] {
+    return Object.values(this.data.knownChats)
+      .filter((chat) => !scope || chat.scope === scope)
+      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
   }
 
   getRecentMessages(chatId: string, limit: number): StoredMessage[] {
@@ -263,6 +311,46 @@ export class BotStore {
     );
   }
 
+  addRootUser(talkerId: string, talkerName: string) {
+    this.data.rootUsers[talkerId] = talkerName;
+    this.save();
+  }
+
+  isRootUser(talkerId: string): boolean {
+    return Boolean(this.data.rootUsers[talkerId]);
+  }
+
+  getRootUsers() {
+    return Object.entries(this.data.rootUsers).map(([talkerId, talkerName]) => ({
+      talkerId,
+      talkerName,
+    }));
+  }
+
+  setChatAccess(
+    context: Pick<ChatAccessRule, "scope" | "chatId" | "chatName">,
+    status: ChatAccessStatus,
+    updatedBy: string
+  ) {
+    this.data.chatAccess[context.chatId] = {
+      ...context,
+      status,
+      updatedAt: new Date().toISOString(),
+      updatedBy,
+    };
+    this.save();
+  }
+
+  getChatAccess(chatId: string): ChatAccessRule | undefined {
+    return this.data.chatAccess[chatId];
+  }
+
+  getChatAccessRules(status?: ChatAccessStatus): ChatAccessRule[] {
+    return Object.values(this.data.chatAccess)
+      .filter((rule) => !status || rule.status === status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
   setGroupMode(groupId: string, groupName: string, mode: GroupMode) {
     this.data.groupSettings[groupId] = {
       groupId,
@@ -298,9 +386,20 @@ export class BotStore {
     fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
   }
 
-  private trimMessages(maxMessages = 5000) {
-    if (this.data.messages.length > maxMessages) {
-      this.data.messages = this.data.messages.slice(-maxMessages);
+  private trimMessages(maxTotalMessages = 8000, maxMessagesPerChat = 500) {
+    const byChat = new Map<string, StoredMessage[]>();
+    for (const message of this.data.messages) {
+      const messages = byChat.get(message.chatId) || [];
+      messages.push(message);
+      byChat.set(message.chatId, messages);
+    }
+
+    this.data.messages = Array.from(byChat.values())
+      .flatMap((messages) => messages.slice(-maxMessagesPerChat))
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+    if (this.data.messages.length > maxTotalMessages) {
+      this.data.messages = this.data.messages.slice(-maxTotalMessages);
     }
   }
 

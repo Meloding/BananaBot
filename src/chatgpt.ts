@@ -12,9 +12,11 @@ import { ContactInterface, RoomInterface } from "wechaty/impls";
 import { Configuration, OpenAIApi } from "openai";
 import {
   BotStore,
+  ChatAccessStatus,
   ChatContext,
   ChatScope,
   GroupMode,
+  KnownChat,
   ReminderItem,
   ReminderRepeat,
 } from "./store.js";
@@ -68,6 +70,7 @@ interface RoutedIntent {
   remindAt?: string;
   reminderContent?: string;
   repeat?: ReminderRepeat;
+  repeatCount?: number;
   tags?: string[];
   reason?: string;
 }
@@ -76,11 +79,13 @@ interface ParsedReminder {
   remindAt: Date;
   content: string;
   repeat: ReminderRepeat;
+  repeatCount: number;
 }
 
 type AgentToolName =
   | "schedule_document"
   | "file_create"
+  | "usage_report_file"
   | "code_run"
   | "plan_only";
 
@@ -120,6 +125,12 @@ interface PendingMediaMessage {
   processedText?: string;
 }
 
+interface RootListEntry {
+  scope: ChatScope;
+  chatId: string;
+  chatName: string;
+}
+
 export class ChatGPTBot {
   botName: string = "";
   startTime: Date = new Date();
@@ -131,11 +142,13 @@ export class ChatGPTBot {
   private store = new BotStore(Config.botDataPath);
   private openaiAccountConfig: any;
   private openaiApiInstance: any;
+  private weChatBot: any;
   private reminderLoopStarted = false;
   private lastGroupReplyAt: Map<string, number> = new Map();
   private pendingMediaByChat: Map<string, PendingMediaMessage[]> = new Map();
   private pendingApprovals: Map<string, PendingApproval> = new Map();
   private pendingFilesByChat: Map<string, string[]> = new Map();
+  private rootLastListByUser: Map<string, RootListEntry[]> = new Map();
   private readonly pendingMediaTtlMs = 10 * 60 * 1000;
   private readonly pendingMediaLimit = 6;
   private readonly pendingApprovalTtlMs = 10 * 60 * 1000;
@@ -161,7 +174,7 @@ export class ChatGPTBot {
       "你支持私聊和群聊定时提醒；不要声称群聊不能定时，除非系统明确报错。",
       "你通过用户配置的模型 API 工作，回复会消耗 token；被问到成本或消耗时要诚实说明，并提示可以查询 token 用量。",
       "在群聊里不要刷屏，不确定是否该说话时保持克制。",
-      "回答尽量使用用户的语言，简洁但不要冷冰冰。",
+      "回答尽量像真人聊天：短一点、自然一点，能一句话说清就不要写长段。",
       `当前日期：${this.currentDate}`,
     ].join("\n");
   }
@@ -203,6 +216,7 @@ export class ChatGPTBot {
   }
 
   startReminderLoop(weChatBot: any) {
+    this.weChatBot = weChatBot;
     if (this.reminderLoopStarted) {
       return;
     }
@@ -221,21 +235,34 @@ export class ChatGPTBot {
       return false;
     }
 
+    if (
+      Config.ignoreOfficialAccounts &&
+      this.isOfficialContact(message.talker()) &&
+      !this.isRootAuthText(text)
+    ) {
+      return true;
+    }
+
     const context = await this.createContext(message);
+    const rootHandled = await this.handleRootControlMessage(message, context, text);
+    if (rootHandled) {
+      return true;
+    }
+
     const modeCommand = this.parseDirectGroupModeCommand(text);
     if (context.scope === "group" && modeCommand.type === "menu") {
-      await message.say(this.groupModeMenu());
+      await this.replyToContext(message, context, this.groupModeMenu());
       return true;
     }
 
     if (context.scope === "group" && modeCommand.type === "switch") {
       this.store.setGroupMode(context.chatId, context.chatName, modeCommand.mode);
-      await message.say(`已切换：${this.describeGroupMode(modeCommand.mode)}`);
+      await this.replyToContext(message, context, `已切换：${this.describeGroupMode(modeCommand.mode)}`);
       return true;
     }
 
     if (text === "菜单" || text === "帮助") {
-      await message.say(
+      await this.replyToContext(message, context,
         [
           "我现在支持：",
           "1. 私聊直接对话，不需要 Hi bot:",
@@ -249,11 +276,255 @@ export class ChatGPTBot {
 
     const myKeyword = "麦扣";
     if (text.includes(myKeyword)) {
-      await message.say("🤖️：call我做咩啊大佬");
+      await this.replyToContext(message, context, "🤖️：call我做咩啊大佬");
       return true;
     }
 
     return false;
+  }
+
+  private async handleRootControlMessage(
+    message: Message,
+    context: ChatContext,
+    text: string
+  ): Promise<boolean> {
+    if (this.isRootAuthText(text)) {
+      this.store.addRootUser(context.talkerId, context.talkerName);
+      await this.replyToContext(message, context, "添加 root 成功。发送 #root帮助 查看管理命令。");
+      return true;
+    }
+
+    if (!this.store.isRootUser(context.talkerId)) {
+      return false;
+    }
+
+    const compact = text.trim();
+    if (!compact.startsWith("#")) {
+      return false;
+    }
+
+    if (/^#root帮助$/.test(compact)) {
+      await this.replyToContext(message, context,
+        [
+          "root 命令：",
+          "#好友列表 / #群列表 / #会话列表",
+          "#白名单",
+          "#允许 编号",
+          "#禁止 编号",
+          "#总结 编号",
+          "#root列表",
+        ].join("\n")
+      );
+      return true;
+    }
+
+    if (/^#root列表$/.test(compact)) {
+      const roots = this.store.getRootUsers();
+      await this.replyToContext(message, context,
+        roots.length
+          ? roots.map((root, index) => `${index + 1}. ${root.talkerName}`).join("\n")
+          : "还没有 root 用户。"
+      );
+      return true;
+    }
+
+    if (/^#白名单$/.test(compact)) {
+      const rules = this.store.getChatAccessRules();
+      await this.replyToContext(message, context,
+        rules.length
+          ? rules
+              .map(
+                (rule, index) =>
+                  `${index + 1}. ${rule.status === "allow" ? "允许" : "禁止"} [${
+                    rule.scope === "group" ? "群" : "好友"
+                  }] ${rule.chatName}`
+              )
+              .join("\n")
+          : "当前没有显式白/黑名单规则。默认允许好友和群，root 可以用 #禁止 编号 关闭某个会话。"
+      );
+      return true;
+    }
+
+    if (/^#好友列表$/.test(compact)) {
+      const contacts = await this.listContactsForRoot();
+      this.rootLastListByUser.set(context.talkerId, contacts);
+      await this.replyToContext(message, context, this.formatRootList(contacts, "好友列表"));
+      return true;
+    }
+
+    if (/^#群列表$/.test(compact)) {
+      const rooms = await this.listRoomsForRoot();
+      this.rootLastListByUser.set(context.talkerId, rooms);
+      await this.replyToContext(message, context, this.formatRootList(rooms, "群列表"));
+      return true;
+    }
+
+    if (/^#会话列表$/.test(compact)) {
+      const chats = this.store.getKnownChats().map((chat) => this.knownChatToRootEntry(chat));
+      this.rootLastListByUser.set(context.talkerId, chats);
+      await this.replyToContext(message, context, this.formatRootList(chats, "已知会话"));
+      return true;
+    }
+
+    const accessMatch = compact.match(/^#(允许|禁止|剔除|拉黑)\s*(\d+|.+)$/);
+    if (accessMatch) {
+      const status: ChatAccessStatus =
+        accessMatch[1] === "允许" ? "allow" : "deny";
+      const target = this.resolveRootListEntry(context.talkerId, accessMatch[2]);
+      if (!target) {
+        await this.replyToContext(message, context, "没找到这个编号。请先发送 #好友列表、#群列表 或 #会话列表。");
+        return true;
+      }
+      this.store.setChatAccess(target, status, context.talkerName);
+      await this.replyToContext(message, context,
+        `${status === "allow" ? "已允许" : "已禁止"} [${
+          target.scope === "group" ? "群" : "好友"
+        }] ${target.chatName}`
+      );
+      return true;
+    }
+
+    const summaryMatch = compact.match(/^#总结\s*(\d+|.+)$/);
+    if (summaryMatch) {
+      const target = this.resolveRootListEntry(context.talkerId, summaryMatch[1]);
+      if (!target) {
+        await this.replyToContext(message, context, "没找到这个编号。请先发送 #会话列表。");
+        return true;
+      }
+      await this.replyToContext(message, context, await this.summarizeChatForRoot(target, context));
+      return true;
+    }
+
+    return false;
+  }
+
+  private isRootAuthText(text: string): boolean {
+    const token = Config.rootAuthToken.trim();
+    if (!token || token.length < 16) {
+      return false;
+    }
+    const normalized = text.trim();
+    return normalized === token || normalized === `#root ${token}`;
+  }
+
+  private isChatAllowed(context: ChatContext): boolean {
+    if (context.scope === "system" || this.store.isRootUser(context.talkerId)) {
+      return true;
+    }
+    const rule = this.store.getChatAccess(context.chatId);
+    return rule?.status !== "deny";
+  }
+
+  private async listContactsForRoot(): Promise<RootListEntry[]> {
+    if (!this.weChatBot?.Contact?.findAll) {
+      return this.store
+        .getKnownChats("private")
+        .map((chat) => this.knownChatToRootEntry(chat));
+    }
+    const contacts = await this.weChatBot.Contact.findAll();
+    return contacts
+      .filter((contact: any) => !contact.self?.() && !this.isOfficialContact(contact))
+      .map((contact: any) => ({
+        scope: "private" as ChatScope,
+        chatId: contact.id,
+        chatName: contact.name?.() || contact.id,
+      }))
+      .sort((a: RootListEntry, b: RootListEntry) =>
+        a.chatName.localeCompare(b.chatName, "zh-CN")
+      );
+  }
+
+  private async listRoomsForRoot(): Promise<RootListEntry[]> {
+    if (!this.weChatBot?.Room?.findAll) {
+      return this.store
+        .getKnownChats("group")
+        .map((chat) => this.knownChatToRootEntry(chat));
+    }
+    const rooms = await this.weChatBot.Room.findAll();
+    const entries: RootListEntry[] = [];
+    for (const room of rooms) {
+      entries.push({
+        scope: "group",
+        chatId: room.id,
+        chatName: (await room.topic()) || room.id,
+      });
+    }
+    return entries.sort((a, b) => a.chatName.localeCompare(b.chatName, "zh-CN"));
+  }
+
+  private knownChatToRootEntry(chat: KnownChat): RootListEntry {
+    return {
+      scope: chat.scope,
+      chatId: chat.chatId,
+      chatName: chat.chatName,
+    };
+  }
+
+  private formatRootList(entries: RootListEntry[], title: string): string {
+    if (!entries.length) {
+      return `${title}为空。`;
+    }
+    const lines = entries.slice(0, 80).map((entry, index) => {
+      const rule = this.store.getChatAccess(entry.chatId);
+      const status = rule?.status === "deny" ? "禁止" : "允许";
+      return `${index + 1}. [${entry.scope === "group" ? "群" : "好友"}][${
+        status
+      }] ${entry.chatName}`;
+    });
+    if (entries.length > lines.length) {
+      lines.push(`还有 ${entries.length - lines.length} 个未显示。`);
+    }
+    return [`${title}：`, ...lines].join("\n");
+  }
+
+  private resolveRootListEntry(
+    rootTalkerId: string,
+    text: string
+  ): RootListEntry | null {
+    const entries = this.rootLastListByUser.get(rootTalkerId) || [];
+    const trimmed = text.trim();
+    if (/^\d+$/.test(trimmed)) {
+      return entries[Number(trimmed) - 1] || null;
+    }
+    return (
+      entries.find((entry) => entry.chatName.includes(trimmed)) ||
+      this.store
+        .getKnownChats()
+        .map((chat) => this.knownChatToRootEntry(chat))
+        .find((entry) => entry.chatName.includes(trimmed)) ||
+      null
+    );
+  }
+
+  private async summarizeChatForRoot(
+    target: RootListEntry,
+    requesterContext: ChatContext
+  ): Promise<string> {
+    const messages = this.store.getRecentMessages(target.chatId, 160);
+    if (!messages.length) {
+      return "这个会话还没有可总结的聊天记录。";
+    }
+    const text = messages
+      .map((message) => `${message.talkerName}[${message.role}]: ${message.text}`)
+      .join("\n");
+    const result = await this.completeChat(
+      [
+        {
+          role: "system",
+          content:
+            "你是 root 管理员的聊天摘要工具。请总结目标会话的主题、重要信息、待办、风险点。不要编造。",
+        },
+        {
+          role: "user",
+          content: `目标会话：${target.chatName}\n\n${text}`,
+        },
+      ],
+      requesterContext,
+      "root_chat_summary",
+      0.2,
+      Config.agentModel
+    );
+    return result.text;
   }
 
   async onMessage(message: Message) {
@@ -262,7 +533,13 @@ export class ChatGPTBot {
     const rawText = message.text() || "";
     const messageType = message.type();
 
+    this.logMessageMeta(message, context, messageType, rawText);
+
     if (this.isIgnorable(talker, messageType, rawText)) {
+      return;
+    }
+
+    if (!this.isChatAllowed(context)) {
       return;
     }
 
@@ -301,7 +578,8 @@ export class ChatGPTBot {
 
     const mediaContext = await this.consumeReferencedMediaIfNeeded(
       cleanText || rawText,
-      context
+      context,
+      rawText
     );
     const enrichedText = await this.enrichTextWithLink(cleanText || rawText);
     const userText = mediaContext
@@ -422,6 +700,21 @@ export class ChatGPTBot {
     context: ChatContext
   ): RoutedIntent | null {
     const userText = text.split("\n\n用户正在询问最近收到的媒体")[0].trim();
+    if (this.isUsageReportRequest(userText)) {
+      if (this.wantsGeneratedFile(userText)) {
+        return {
+          action: "agent_task",
+          agentTool: "usage_report_file",
+          fileType: /csv|表格|excel|xlsx/i.test(userText)
+            ? "csv"
+            : /txt|文本/i.test(userText)
+            ? "txt"
+            : "md",
+          risk: "low",
+        };
+      }
+      return { action: "usage_report" };
+    }
     const parsedReminder = this.parseReminderRequest(userText);
     if (parsedReminder) {
       return {
@@ -429,6 +722,7 @@ export class ChatGPTBot {
         remindAt: parsedReminder.remindAt.toISOString(),
         reminderContent: parsedReminder.content,
         repeat: parsedReminder.repeat,
+        repeatCount: parsedReminder.repeatCount,
       };
     }
     if (this.isReminderListRequest(userText, context)) {
@@ -484,6 +778,18 @@ export class ChatGPTBot {
     return null;
   }
 
+  private isUsageReportRequest(text: string): boolean {
+    return /(token|tokens|调用|api|模型).*(消耗|用量|统计|总消耗|花费|成本|调用次数)|((消耗|用量|统计|花费|成本).*(token|tokens|调用|api|模型))/i.test(
+      text.replace(/\s+/g, "")
+    );
+  }
+
+  private wantsGeneratedFile(text: string): boolean {
+    return /文件|文档|报告|txt|md|markdown|csv|表格|excel|xlsx|导出|生成一份|给我一份/i.test(
+      text
+    );
+  }
+
   private parseReminderRequest(text: string): ParsedReminder | null {
     if (!this.looksLikeReminderCreateRequest(text)) {
       return null;
@@ -521,7 +827,23 @@ export class ChatGPTBot {
       remindAt,
       content: content || "提醒事项",
       repeat,
+      repeatCount: this.parseReminderRepeatCount(text),
     };
+  }
+
+  private parseReminderRepeatCount(text: string): number {
+    const compact = text.replace(/\s+/g, "");
+    const match = compact.match(
+      /(?:连续(?:提醒我?)?|重复(?:提醒我?)?|多提醒|提醒我?)([0-9一二两三四五六七八九十两]{1,3})(?:次|遍|回)/
+    );
+    if (!match) {
+      return 1;
+    }
+    const count = this.parseChineseNumber(match[1]);
+    if (!count || count < 1) {
+      return 1;
+    }
+    return Math.min(count, 6);
   }
 
   private looksLikeReminderCreateRequest(text: string): boolean {
@@ -599,7 +921,7 @@ export class ChatGPTBot {
 
     const compact = text.replace(/\s+/g, "");
     const match = compact.match(
-      /(凌晨|早上|上午|中午|下午|晚上|夜里)?([0-9一二两三四五六七八九十两]{1,4})(?:点|时)(半|([0-9一二两三四五六七八九十]{1,3})分?)?/
+      /(凌晨|早上|上午|中午|下午|傍晚|晚上|夜里)?([0-9一二两三四五六七八九十两]{1,4})(?:点|时)(半|([0-9一二两三四五六七八九十]{1,3})分?)?/
     );
     if (!match) {
       return null;
@@ -622,7 +944,7 @@ export class ChatGPTBot {
       minute = minuteValue;
     }
 
-    if (/下午|晚上|夜里/.test(period) && hour < 12) {
+    if (/下午|傍晚|晚上|夜里/.test(period) && hour < 12) {
       hour += 12;
     } else if (/中午/.test(period) && hour > 0 && hour < 11) {
       hour += 12;
@@ -641,13 +963,16 @@ export class ChatGPTBot {
       )
       .replace(/每天|每日|天天|每一天|今天|明天|后天|大后天/g, " ")
       .replace(
-        /(凌晨|早上|上午|中午|下午|晚上|夜里)?([0-9一二两三四五六七八九十两]{1,4})(?:点|时)(半|([0-9一二两三四五六七八九十]{1,3})分?)?/g,
+        /(凌晨|早上|上午|中午|下午|傍晚|晚上|夜里)?([0-9一二两三四五六七八九十两]{1,4})(?:点|时)(半|([0-9一二两三四五六七八九十]{1,3})分?)?/g,
         " "
       )
       .replace(/([01]?\d|2[0-3])[:：]([0-5]\d)/g, " ")
       .replace(/能不能|可不可以|可以不|可以|能否|能/g, " ")
       .replace(/帮我|给我|麻烦你|麻烦|请你|请/g, " ")
       .replace(/设置|设个|定个|定一个|建个|创建/g, " ")
+      .replace(/连续(?:提醒我?)?[0-9一二两三四五六七八九十两]{1,3}(?:次|遍|回)/g, " ")
+      .replace(/重复(?:提醒我?)?[0-9一二两三四五六七八九十两]{1,3}(?:次|遍|回)/g, " ")
+      .replace(/提醒我?[0-9一二两三四五六七八九十两]{1,3}(?:次|遍|回)/g, " ")
       .replace(/提醒我|提醒一下我|提醒一下|提醒|闹钟|定时|叫我|喊我|别忘了|别忘|记得/g, " ")
       .replace(/到时候|到点/g, " ")
       .replace(/[吗嘛呢吧]$/g, " ")
@@ -674,7 +999,7 @@ export class ChatGPTBot {
       "action 只能是 chat, remember, recall, reminder, list_reminders, agent_task, summarize_today, usage_report, set_group_mode, ignore。",
       "如果用户让你记住、保存、登记信息，使用 remember，并提取 memory。",
       "如果用户询问之前保存的信息，使用 recall，并提取 query。",
-      "如果用户要求设置提醒，使用 reminder，并给出 remindAt 的 ISO 8601 时间和 reminderContent；每天/每日提醒时 repeat 为 daily。",
+      "如果用户要求设置提醒，使用 reminder，并给出 remindAt 的 ISO 8601 时间和 reminderContent；每天/每日提醒时 repeat 为 daily；连续提醒多次时给 repeatCount。",
       "如果用户询问有哪些提醒、为什么没提醒、之前让你提醒过什么，使用 list_reminders。",
       "如果用户要求生成文件、整理日程表、执行代码、做多步骤规划，使用 agent_task。",
       "agent_task 需要给出 agentTool：schedule_document、file_create、code_run 或 plan_only；执行代码 risk 为 high。",
@@ -689,7 +1014,7 @@ export class ChatGPTBot {
       `发言人：${context.talkerName}`,
       "示例输出：",
       "{\"action\":\"remember\",\"memory\":\"高数考试是7月10日上午\",\"tags\":[\"考试\"]}",
-      "{\"action\":\"reminder\",\"remindAt\":\"2026-07-05T08:00:00+08:00\",\"reminderContent\":\"交作业\",\"repeat\":\"none\"}",
+      "{\"action\":\"reminder\",\"remindAt\":\"2026-07-05T08:00:00+08:00\",\"reminderContent\":\"交作业\",\"repeat\":\"none\",\"repeatCount\":1}",
       "{\"action\":\"agent_task\",\"agentTool\":\"schedule_document\",\"fileType\":\"md\",\"risk\":\"medium\"}",
       "{\"action\":\"set_group_mode\",\"mode\":\"quiet\"}",
     ].join("\n");
@@ -759,12 +1084,25 @@ export class ChatGPTBot {
       return "这个提醒时间已经过去了。你可以换一个未来时间，比如“明天上午9点提醒我交作业”。";
     }
     const content = intent.reminderContent || intent.memory || text;
-    this.store.addReminder(context, remindAt.toISOString(), content, repeat);
+    const repeatCount = Math.max(1, Math.min(Number(intent.repeatCount || 1), 6));
+    const createdTimes: Date[] = [];
+    for (let index = 0; index < repeatCount; index += 1) {
+      const time = new Date(remindAt);
+      time.setMinutes(
+        time.getMinutes() + index * Config.reminderFollowupIntervalMinutes
+      );
+      this.store.addReminder(context, time.toISOString(), content, repeat);
+      createdTimes.push(time);
+    }
     const target = context.scope === "group" ? "在本群" : "私聊";
     const repeatText = repeat === "daily" ? "每天 " : "";
-    return `好，我会${target}${repeatText}${this.formatLocalDateTime(
-      remindAt
-    )} 提醒你：${content}`;
+    const timesText =
+      repeatCount > 1
+        ? createdTimes.map((time) => this.formatLocalDateTime(time).slice(11)).join("、")
+        : this.formatLocalDateTime(remindAt);
+    return `好，我会${target}${repeatText}${timesText} 提醒你：${content}${
+      repeatCount > 1 ? `（共 ${repeatCount} 次）` : ""
+    }`;
   }
 
   private handleListReminders(context: ChatContext): string {
@@ -867,6 +1205,9 @@ export class ChatGPTBot {
     if (tool === "file_create") {
       return this.createAgentDocument(text, context, intent.fileType || "md");
     }
+    if (tool === "usage_report_file") {
+      return this.createUsageReportFile(context, intent.fileType || "md");
+    }
     if (tool === "plan_only") {
       return this.createAgentPlan(text, context);
     }
@@ -956,6 +1297,132 @@ export class ChatGPTBot {
     );
     this.queueFileForChat(context.chatId, filePath);
     return `文件已生成：${path.basename(filePath)}`;
+  }
+
+  private createUsageReportFile(context: ChatContext, fileType: string): string {
+    const today = this.formatLocalDate(new Date());
+    const chatToday = this.store.getUsageSummary(today, context.chatId);
+    const chatTotal = this.store.getUsageSummary(undefined, context.chatId);
+    const canSeeGlobal =
+      this.store.isRootUser(context.talkerId) ||
+      (Config.allowGlobalUsageReport && context.scope === "private");
+    const globalToday = canSeeGlobal ? this.store.getUsageSummary(today) : null;
+    const globalTotal = canSeeGlobal ? this.store.getUsageSummary() : null;
+    const extension = ["csv", "txt"].includes(fileType) ? fileType : "md";
+    const content =
+      extension === "csv"
+        ? this.formatUsageCsv(context, today, chatToday, chatTotal, globalToday, globalTotal)
+        : this.formatUsageMarkdown(
+            context,
+            today,
+            chatToday,
+            chatTotal,
+            globalToday,
+            globalTotal
+          );
+    const filePath = this.writeGeneratedFile(
+      context,
+      "usage",
+      extension,
+      content
+    );
+    this.queueFileForChat(context.chatId, filePath);
+    return `token 用量文件已生成：${path.basename(filePath)}`;
+  }
+
+  private formatUsageMarkdown(
+    context: ChatContext,
+    today: string,
+    chatToday: ReturnType<BotStore["getUsageSummary"]>,
+    chatTotal: ReturnType<BotStore["getUsageSummary"]>,
+    globalToday: ReturnType<BotStore["getUsageSummary"]> | null,
+    globalTotal: ReturnType<BotStore["getUsageSummary"]> | null
+  ): string {
+    const lines = [
+      "# Token 用量报告",
+      "",
+      `日期：${today}`,
+      `会话：${context.chatName}`,
+      "",
+      "## 当前会话今日",
+      `调用次数：${chatToday.calls}`,
+      `总 tokens：${chatToday.totalTokens}`,
+      `输入/输出：${chatToday.promptTokens}/${chatToday.completionTokens}`,
+      "",
+      "## 当前会话累计",
+      `调用次数：${chatTotal.calls}`,
+      `总 tokens：${chatTotal.totalTokens}`,
+      `输入/输出：${chatTotal.promptTokens}/${chatTotal.completionTokens}`,
+    ];
+    if (globalToday && globalTotal) {
+      lines.push(
+        "",
+        "## 全局今日",
+        `调用次数：${globalToday.calls}`,
+        `总 tokens：${globalToday.totalTokens}`,
+        "",
+        "## 全局累计",
+        `调用次数：${globalTotal.calls}`,
+        `总 tokens：${globalTotal.totalTokens}`
+      );
+    }
+    return lines.join("\n");
+  }
+
+  private formatUsageCsv(
+    context: ChatContext,
+    today: string,
+    chatToday: ReturnType<BotStore["getUsageSummary"]>,
+    chatTotal: ReturnType<BotStore["getUsageSummary"]>,
+    globalToday: ReturnType<BotStore["getUsageSummary"]> | null,
+    globalTotal: ReturnType<BotStore["getUsageSummary"]> | null
+  ): string {
+    const rows: Array<Array<string | number>> = [
+      ["范围", "日期", "会话", "调用次数", "总tokens", "输入tokens", "输出tokens"],
+      [
+        "当前会话今日",
+        today,
+        context.chatName,
+        chatToday.calls,
+        chatToday.totalTokens,
+        chatToday.promptTokens,
+        chatToday.completionTokens,
+      ],
+      [
+        "当前会话累计",
+        "全部",
+        context.chatName,
+        chatTotal.calls,
+        chatTotal.totalTokens,
+        chatTotal.promptTokens,
+        chatTotal.completionTokens,
+      ],
+    ];
+    if (globalToday && globalTotal) {
+      rows.push(
+        [
+          "全局今日",
+          today,
+          "全部",
+          globalToday.calls,
+          globalToday.totalTokens,
+          globalToday.promptTokens,
+          globalToday.completionTokens,
+        ],
+        [
+          "全局累计",
+          "全部",
+          "全部",
+          globalTotal.calls,
+          globalTotal.totalTokens,
+          globalTotal.promptTokens,
+          globalTotal.completionTokens,
+        ]
+      );
+    }
+    return rows
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
   }
 
   private async createAgentPlan(text: string, context: ChatContext): Promise<string> {
@@ -1112,6 +1579,7 @@ export class ChatGPTBot {
     const descriptions: Record<AgentToolName, string> = {
       schedule_document: "整理日程/待办并生成文件",
       file_create: "生成文档文件",
+      usage_report_file: "导出 token 用量文件",
       code_run: "执行用户提供的代码",
       plan_only: "规划复杂任务",
     };
@@ -1297,6 +1765,7 @@ export class ChatGPTBot {
   private isSupportedMediaMessage(messageType: MessageType): boolean {
     return [
       MessageType.Audio,
+      MessageType.Emoticon,
       MessageType.Image,
       MessageType.Video,
     ].includes(messageType);
@@ -1328,11 +1797,12 @@ export class ChatGPTBot {
 
   private async consumeReferencedMediaIfNeeded(
     text: string,
-    context: ChatContext
+    context: ChatContext,
+    rawText: string = text
   ): Promise<string> {
     this.prunePendingMedia(context.chatId);
     const pending = this.pendingMediaByChat.get(context.chatId) || [];
-    if (!pending.length || !this.referencesRecentMedia(text)) {
+    if (!pending.length || !this.referencesRecentMedia(text, rawText)) {
       return "";
     }
 
@@ -1380,12 +1850,12 @@ export class ChatGPTBot {
     }
   }
 
-  private referencesRecentMedia(text: string): boolean {
+  private referencesRecentMedia(text: string, rawText: string = text): boolean {
     const compact = text.replace(/\s+/g, "");
     return (
-      this.isMentioned(text) ||
+      this.isMentioned(rawText) ||
       this.startsWithTrigger(text) ||
-      /这张|这个图|这段视频|这条语音|刚才.*(图|图片|截图|照片|视频|语音|音频)|上面.*(图|图片|截图|照片|视频|语音|音频)|上一条|前面.*(图|图片|截图|照片|视频|语音|音频)|图片|截图|照片|图里|图中|视频|语音|音频|看一下|看看|识别|转文字|解释一下/i.test(
+      /这张|这个图|这个表情|这段视频|这条语音|刚才.*(图|图片|截图|照片|视频|语音|音频|表情)|上面.*(图|图片|截图|照片|视频|语音|音频|表情)|上一条|前面.*(图|图片|截图|照片|视频|语音|音频|表情)|图片|截图|照片|图里|图中|视频|语音|音频|表情包|表情|看一下|看看|识别|转文字|解释一下/i.test(
         compact
       )
     );
@@ -1401,6 +1871,9 @@ export class ChatGPTBot {
     if (/图片|截图|照片|图里|图中|这张/i.test(text)) {
       return MessageType.Image;
     }
+    if (/表情包|表情/i.test(text)) {
+      return MessageType.Emoticon;
+    }
     return null;
   }
 
@@ -1414,6 +1887,9 @@ export class ChatGPTBot {
     }
     if (messageType === MessageType.Image) {
       return this.describeImageMessage(message, context);
+    }
+    if (messageType === MessageType.Emoticon) {
+      return this.describeEmoticonMessage(message, context);
     }
     if (messageType === MessageType.Video) {
       return this.describeVideoMessage(message, context);
@@ -1450,6 +1926,37 @@ export class ChatGPTBot {
       Config.visionModel
     );
     return `[图片理解]\n${result.text}`;
+  }
+
+  private async describeEmoticonMessage(
+    message: Message,
+    context: ChatContext
+  ): Promise<string> {
+    if (!Config.multimodalEnabled) {
+      return "[Emoticon] 已收到表情包，但多模态功能未开启。";
+    }
+    const media = await this.readMessageMedia(message, MessageType.Emoticon);
+    const result = await this.completeChat(
+      [
+        {
+          role: "system",
+          content:
+            "你是微信表情包理解模块。请识别表情包的画面、文字、情绪和可能的回复语境。简洁输出。",
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "请理解这个微信表情包的含义。" },
+            { type: "image_url", image_url: { url: media.dataUrl } },
+          ],
+        },
+      ],
+      context,
+      "emoticon_understanding",
+      0.2,
+      Config.visionModel
+    );
+    return `[表情包理解]\n${result.text}`;
   }
 
   private async transcribeAudioMessage(
@@ -1599,7 +2106,7 @@ export class ChatGPTBot {
     if (map[extension]) {
       return map[extension];
     }
-    if (messageType === MessageType.Image) {
+    if (messageType === MessageType.Image || messageType === MessageType.Emoticon) {
       return "image/jpeg";
     }
     if (messageType === MessageType.Audio) {
@@ -1776,7 +2283,7 @@ export class ChatGPTBot {
 
     const now = Date.now();
     const lastReplyAt = this.lastGroupReplyAt.get(context.chatId) || 0;
-    const cooledDown = now - lastReplyAt > 90 * 1000;
+    const cooledDown = now - lastReplyAt > Config.activeGroupCooldownSeconds * 1000;
     const shouldSpeak =
       direct ||
       modeSwitch ||
@@ -1811,6 +2318,7 @@ export class ChatGPTBot {
     return (
       (this.disableSelfChat && talker.self()) ||
       talker.name() === "微信团队" ||
+      (Config.ignoreOfficialAccounts && this.isOfficialContact(talker)) ||
       messageType === MessageType.Unknown ||
       messageType === MessageType.Contact ||
       messageType === MessageType.ChatHistory ||
@@ -1818,13 +2326,37 @@ export class ChatGPTBot {
       messageType === MessageType.Transfer ||
       messageType === MessageType.Post ||
       messageType === MessageType.MiniProgram ||
-      messageType === MessageType.Emoticon ||
       messageType === MessageType.Location ||
       messageType === MessageType.Recalled ||
       messageType === MessageType.RedEnvelope ||
       text.includes("收到一条视频/语音聊天消息，请在手机上查看") ||
       text.includes("收到红包，请在手机上查看") ||
       text.includes("/cgi-bin/mmwebwx-bin/webwxgetpubliclinkimg")
+    );
+  }
+
+  private isOfficialContact(talker: any): boolean {
+    try {
+      const contactType = talker.type?.();
+      return contactType === 2 || String(contactType).toLowerCase() === "official";
+    } catch {
+      return false;
+    }
+  }
+
+  private logMessageMeta(
+    message: Message,
+    context: ChatContext,
+    messageType: MessageType,
+    text: string
+  ) {
+    if (!Config.debugMessageTypes) {
+      return;
+    }
+    const roomText = context.scope === "group" ? ` room="${context.chatName}"` : "";
+    const textPreview = text ? ` text="${text.slice(0, 80)}"` : "";
+    console.log(
+      `📨 type=${MessageType[messageType] || messageType} scope=${context.scope}${roomText} talker="${context.talkerName}"${textPreview}`
     );
   }
 
@@ -2052,7 +2584,7 @@ export class ChatGPTBot {
 
   private mayNeedTool(text: string, context?: ChatContext): boolean {
     return (
-      /记住|记一下|保存|存一下|提醒|闹钟|别忘|定时|总结|复盘|消耗|token|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业|日程表|计划表|文件|文档|表格|报告|执行代码|运行代码|跑代码|python|javascript|node/i.test(
+      /记住|记一下|保存|存一下|提醒|闹钟|别忘|定时|总结|复盘|消耗|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业|日程表|计划表|文件|文档|表格|报告|执行代码|运行代码|跑代码|python|javascript|node/i.test(
         text
       ) ||
       (context?.scope === "group" && this.looksLikeModeSwitchRequest(text))

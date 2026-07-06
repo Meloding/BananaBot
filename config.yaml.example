@@ -9,6 +9,11 @@ defaultGroupMode: "smart"
 botDataPath: "./data/bot-store.json"
 historyMessageLimit: 12
 agentRouterEnabled: true
+rootAuthToken: ""
+ignoreOfficialAccounts: true
+activeGroupCooldownSeconds: 30
+reminderFollowupIntervalMinutes: 5
+debugMessageTypes: true
 multimodalEnabled: true
 visionModel: "qwen-vl-plus"
 audioModel: "qwen-audio-turbo-latest"

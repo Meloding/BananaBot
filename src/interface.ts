@@ -10,6 +10,11 @@ export interface IConfig {
   botDataPath: string;
   historyMessageLimit: number;
   agentRouterEnabled: boolean;
+  rootAuthToken: string;
+  ignoreOfficialAccounts: boolean;
+  activeGroupCooldownSeconds: number;
+  reminderFollowupIntervalMinutes: number;
+  debugMessageTypes: boolean;
   multimodalEnabled: boolean;
   visionModel: string;
   audioModel: string;
