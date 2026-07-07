@@ -685,7 +685,10 @@ export class WechatCompanion {
         content: [
           `当前会话类型：${context.scope === "group" ? "群聊" : "私聊"}`,
           `当前会话：${context.chatName}`,
+          `机器人名字：${this.botName || "未设置"}`,
           `当前发言人：${context.talkerName}`,
+          "群聊中，每条历史消息前的名字就是发送者。不要把当前发言人、机器人、其他群友混同。",
+          "遇到“我/你/他/谁”这类身份指代时，优先按发言人和上下文判断；不确定就轻松追问，不要硬猜。",
           "相关长期记忆：",
           memoryText,
         ].join("\n"),
@@ -693,7 +696,10 @@ export class WechatCompanion {
       ...recentMessages,
       {
         role: "user",
-        content: text,
+        content:
+          context.scope === "group"
+            ? `${context.talkerName} 说：${text}`
+            : text,
       },
     ];
   }
@@ -740,7 +746,7 @@ export class WechatCompanion {
 
   private parseDeterministicAgentIntent(text: string): RoutedIntent | null {
     const compact = text.replace(/\s+/g, "");
-    if (/跑(一下)?代码|执行(一下)?代码|运行(一下)?代码|code|python|javascript|node/i.test(compact)) {
+    if (this.isExplicitCodeRunRequest(text)) {
       return {
         action: "agent_task",
         agentTool: "code_run",
@@ -1005,6 +1011,7 @@ export class WechatCompanion {
       "如果用户要求设置提醒，使用 reminder，并给出 remindAt 的 ISO 8601 时间和 reminderContent；每天/每日提醒时 repeat 为 daily；连续提醒多次时给 repeatCount。",
       "如果用户询问有哪些提醒、为什么没提醒、之前让你提醒过什么，使用 list_reminders。",
       "如果用户要求生成文件、整理日程表、执行代码、做多步骤规划，使用 agent_task。",
+      "只有用户明确要求运行/执行/跑代码，或提供代码块并要求看输出/结果时，才使用 code_run；不要把 codex、code 名词、Python/Node 话题讨论误判为执行代码。",
       "agent_task 需要给出 agentTool：schedule_document、file_create、code_run 或 plan_only；执行代码 risk 为 high。",
       "如果用户要求总结今天/本群/当前对话，使用 summarize_today。",
       "只有当用户明确询问 API、模型、token 的消耗/用量/统计/费用/调用次数时，才使用 usage_report；如果 token 只是书名、标题、搜索词或普通话题的一部分，必须保持 chat。",
@@ -1033,7 +1040,15 @@ export class WechatCompanion {
         0.1,
         Config.agentModel
       );
-      return this.parseIntent(result.text);
+      const intent = this.parseIntent(result.text);
+      if (
+        intent.action === "agent_task" &&
+        intent.agentTool === "code_run" &&
+        !this.isExplicitCodeRunRequest(text)
+      ) {
+        return { action: "chat" };
+      }
+      return intent;
     } catch (e: any) {
       this.logApiError(e);
       return { action: "chat" };
@@ -1566,7 +1581,7 @@ export class WechatCompanion {
 
   private inferAgentTool(text: string): AgentToolName {
     const compact = text.replace(/\s+/g, "");
-    if (/代码|python|javascript|node|运行|执行/.test(compact)) {
+    if (this.isExplicitCodeRunRequest(text)) {
       return "code_run";
     }
     if (/日程|计划表|考试|ddl|待办表/.test(compact)) {
@@ -1743,7 +1758,10 @@ export class WechatCompanion {
       messageType,
     });
 
-    const replyMessage = await this.handleUserText(understoodText, context);
+    const replyMessage = await this.onCompanionChat(
+      `用户发来了一条 ${typeName}，系统理解结果如下。请只基于媒体内容自然回复，不要触发工具或执行任何代码：\n${understoodText}`,
+      context
+    );
     if (replyMessage) {
       const sentMessage = await this.replyToContext(message, context, replyMessage);
       this.store.addMessage({
@@ -2686,8 +2704,27 @@ export class WechatCompanion {
       /生成.*(文件|文档|报告|markdown|md|txt|csv)|写一份.*(文档|报告)|导出.*(文件|文档)/i.test(
         compact
       ) ||
-      /执行代码|运行代码|跑代码|```|python|javascript|node/i.test(compact) ||
+      this.isExplicitCodeRunRequest(text) ||
       (context?.scope === "group" && this.looksLikeModeSwitchRequest(text))
+    );
+  }
+
+  private isExplicitCodeRunRequest(text: string): boolean {
+    const compact = text.replace(/\s+/g, "");
+    const hasCodeBlock = /```/.test(text);
+    const asksRun = /运行|执行|跑|算一下|输出|结果|看看结果|run|execute/i.test(
+      compact
+    );
+    if (hasCodeBlock && asksRun) {
+      return true;
+    }
+    return (
+      /(运行|执行|跑)(一下)?(这段|下面|以下|我发的)?(代码|程序|脚本)/i.test(
+        compact
+      ) ||
+      /(代码|程序|脚本)(运行|执行|跑)(一下)?/i.test(compact) ||
+      /\brun\s+(this\s+)?code\b/i.test(text) ||
+      /\bexecute\s+(this\s+)?code\b/i.test(text)
     );
   }
 
