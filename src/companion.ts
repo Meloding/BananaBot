@@ -250,6 +250,12 @@ export class WechatCompanion {
       return true;
     }
 
+    if (context.scope === "group" && modeCommand.type === "status") {
+      const mode = this.store.getGroupMode(context.chatId, Config.defaultGroupMode);
+      await this.replyToContext(message, context, `当前是：${this.describeGroupMode(mode)}`);
+      return true;
+    }
+
     if (context.scope === "group" && modeCommand.type === "switch") {
       this.store.setGroupMode(context.chatId, context.chatName, modeCommand.mode);
       await this.replyToContext(message, context, `已切换：${this.describeGroupMode(modeCommand.mode)}`);
@@ -2720,12 +2726,16 @@ export class WechatCompanion {
 
   private parseDirectGroupModeCommand(
     text: string
-  ): { type: "none" } | { type: "menu" } | { type: "switch"; mode: GroupMode } {
+  ):
+    | { type: "none" }
+    | { type: "menu" }
+    | { type: "status" }
+    | { type: "switch"; mode: GroupMode } {
     const compact = text.replace(/\s+/g, "");
     if (/^\/(模式|群模式|机器人模式|mode|help|\?)$/i.test(compact)) {
       return { type: "menu" };
     }
-    if (/^\/([12345])$/.test(compact)) {
+    if (/^\/([12345])(?:安静|智能|活跃|超级活跃|超活跃|话唠)?$/.test(compact)) {
       const modeMap: Record<string, GroupMode> = {
         "1": "quiet",
         "2": "smart",
@@ -2733,7 +2743,7 @@ export class WechatCompanion {
         "4": "super_active",
         "5": "talkative",
       };
-      return { type: "switch", mode: modeMap[compact.slice(1)] };
+      return { type: "switch", mode: modeMap[compact[1]] };
     }
     if (/^\/(安静|静默|少说话|quiet|silent)$/.test(compact)) {
       return { type: "switch", mode: "quiet" };
@@ -2752,6 +2762,9 @@ export class WechatCompanion {
     }
     if (/^(群聊模式|群模式|机器人模式|切换模式|模式切换)$/.test(compact)) {
       return { type: "menu" };
+    }
+    if (/现在(是)?什么模式|当前(是)?什么模式|什么群聊模式|什么机器人模式/.test(compact)) {
+      return { type: "status" };
     }
     const mode = this.parseNaturalGroupMode(text);
     return mode ? { type: "switch", mode } : { type: "none" };
