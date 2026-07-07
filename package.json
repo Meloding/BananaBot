@@ -1,5 +1,5 @@
 {
-  "name": "chatgpt-on-wechat",
+  "name": "my-wechat-bot",
   "version": "1.0.0",
   "description": "",
   "main": "src/main.ts",
@@ -12,14 +12,12 @@
   "author": "Michael Huang",
   "license": "ISC",
   "dependencies": {
-    "@dqbd/tiktoken": "^0.4.0",
     "dotenv": "^16.0.3",
     "nth-check": ">=2.0.1",
     "openai": "^3.2.1",
     "qrcode": "^1.5.1",
     "uuid": "^9.0.0",
     "wechaty": "^1.20.2",
-    "wechaty-puppet-wechat": "^1.18.4",
     "wechaty-puppet-wechat4u": "^1.14.14",
     "yaml": "^2.1.3"
   },

@@ -3,7 +3,7 @@ openaiOrganizationID: ""
 openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 openaiModel: "qwen-plus"
 agentModel: "qwen-turbo"
-chatgptTriggerKeyword: "Hi bot:"
+legacyTriggerKeyword: "Hi bot:"
 privateAutoReply: true
 defaultGroupMode: "smart"
 botDataPath: "./data/bot-store.json"
@@ -12,6 +12,8 @@ agentRouterEnabled: true
 rootAuthToken: ""
 ignoreOfficialAccounts: true
 activeGroupCooldownSeconds: 30
+superActiveGroupCooldownSeconds: 15
+talkativeGroupCooldownSeconds: 5
 reminderFollowupIntervalMinutes: 5
 debugMessageTypes: true
 multimodalEnabled: true

@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 
 export type ChatScope = "private" | "group";
-export type GroupMode = "quiet" | "smart" | "active";
+export type GroupMode = "quiet" | "smart" | "active" | "super_active" | "talkative";
 export type ReminderRepeat = "none" | "daily";
 export type ChatAccessStatus = "allow" | "deny";
 
@@ -127,7 +127,6 @@ export class BotStore {
       ...message,
     });
     this.rememberChat(message.scope, message.chatId, message.chatName, timestamp);
-    this.trimMessages();
     this.save();
   }
 
@@ -384,23 +383,6 @@ export class BotStore {
   private save() {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
-  }
-
-  private trimMessages(maxTotalMessages = 8000, maxMessagesPerChat = 500) {
-    const byChat = new Map<string, StoredMessage[]>();
-    for (const message of this.data.messages) {
-      const messages = byChat.get(message.chatId) || [];
-      messages.push(message);
-      byChat.set(message.chatId, messages);
-    }
-
-    this.data.messages = Array.from(byChat.values())
-      .flatMap((messages) => messages.slice(-maxMessagesPerChat))
-      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
-    if (this.data.messages.length > maxTotalMessages) {
-      this.data.messages = this.data.messages.slice(-maxTotalMessages);
-    }
   }
 
   private scoreMemory(memory: MemoryItem, query: string, queryParts: string[]) {

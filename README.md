@@ -1,11 +1,11 @@
 # MyWechatBot
 
-一个基于 Wechaty + Qwen/百炼 OpenAI 兼容接口的微信智能机器人。
+一个基于 Wechaty + 百炼/OpenAI 兼容接口的微信智能机器人。
 
 当前版本重点能力：
 
 - 私聊默认直接回复，不需要唤醒词。
-- 群聊支持安静、智能、活跃三种模式。
+- 群聊支持安静、智能、活跃、超级活跃、话唠五种模式。
 - 历史消息、长期记忆、提醒、token 用量按会话隔离保存。
 - 支持自然语言触发工具，不需要用户记住固定命令。
 - 支持图片理解、语音转写尝试、视频抽帧理解尝试、链接预读取。
@@ -38,7 +38,7 @@ Wechaty / wechaty-puppet-wechat4u
   ↓
 记忆、提醒、token 用量存储
   ↓
-Qwen 模型 / 工具路由 / 多模态模型
+聊天模型 / 工具路由 / 多模态模型
   ↓
 Markdown 清洗和智能分段
   ↓
@@ -48,7 +48,7 @@ Markdown 清洗和智能分段
 主要代码：
 
 - `src/main.ts`：Wechaty 登录、扫码、消息入口。
-- `src/chatgpt.ts`：机器人主逻辑、工具路由、多模态处理、回复格式化。
+- `src/companion.ts`：机器人主逻辑、工具路由、多模态处理、回复格式化。
 - `src/store.ts`：本地数据存储，负责消息、记忆、提醒、token 记录。
 - `src/config.ts`：读取 `config.yaml` 或环境变量。
 
@@ -100,8 +100,8 @@ tar -xf node-v16.20.2-linux-x64.tar.xz
 
 ```bash
 cd /opt
-git clone git@github.com:Meloding/MyWechatBot.git chatgpt-on-wechat
-cd /opt/chatgpt-on-wechat
+git clone git@github.com:Meloding/MyWechatBot.git my-wechat-bot
+cd /opt/my-wechat-bot
 ```
 
 ### 3. 安装依赖
@@ -139,17 +139,17 @@ nano config.yaml
 
 ### 7. systemd 服务
 
-创建 `/etc/systemd/system/chatgpt-on-wechat.service`：
+创建 `/etc/systemd/system/my-wechat-bot.service`：
 
 ```ini
 [Unit]
-Description=ChatGPT on WeChat
+Description=Companion on WeChat
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/chatgpt-on-wechat
+WorkingDirectory=/opt/my-wechat-bot
 Environment=NODE_ENV=production
 Environment=WECHATY_PUPPET=wechaty-puppet-wechat4u
 Environment=PATH=/opt/node-v16.20.2-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -165,14 +165,14 @@ WantedBy=multi-user.target
 
 ```bash
 systemctl daemon-reload
-systemctl enable chatgpt-on-wechat.service
-systemctl start chatgpt-on-wechat.service
+systemctl enable my-wechat-bot.service
+systemctl start my-wechat-bot.service
 ```
 
 扫码登录：
 
 ```bash
-journalctl -u chatgpt-on-wechat.service -f
+journalctl -u my-wechat-bot.service -f
 ```
 
 日志里会出现二维码链接。用机器人微信号扫码确认即可。
@@ -187,7 +187,7 @@ openaiOrganizationID: ""
 openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 openaiModel: "qwen-plus"
 agentModel: "qwen-turbo"
-chatgptTriggerKeyword: "Hi bot:"
+legacyTriggerKeyword: "Hi bot:"
 
 privateAutoReply: true
 defaultGroupMode: "smart"
@@ -198,6 +198,8 @@ agentRouterEnabled: true
 rootAuthToken: ""
 ignoreOfficialAccounts: true
 activeGroupCooldownSeconds: 30
+superActiveGroupCooldownSeconds: 15
+talkativeGroupCooldownSeconds: 5
 reminderFollowupIntervalMinutes: 5
 debugMessageTypes: true
 
@@ -223,15 +225,17 @@ generatedFilesPath: "./data/generated"
 | `openaiBasePath` | OpenAI 兼容模式地址 |
 | `openaiModel` | 普通聊天模型，默认 `qwen-plus` |
 | `agentModel` | 工具路由和复杂任务模型，默认 `qwen-turbo` |
-| `chatgptTriggerKeyword` | 兼容旧触发词；私聊默认不需要 |
+| `legacyTriggerKeyword` | 兼容旧触发词；私聊默认不需要 |
 | `privateAutoReply` | 私聊是否自动回复所有文本 |
-| `defaultGroupMode` | 群聊默认模式：`quiet` / `smart` / `active` |
+| `defaultGroupMode` | 群聊默认模式：`quiet` / `smart` / `active` / `super_active` / `talkative` |
 | `botDataPath` | 本地数据文件 |
 | `historyMessageLimit` | 每次对话带入的最近消息条数 |
 | `agentRouterEnabled` | 是否启用 LLM 工具路由 |
 | `rootAuthToken` | root 授权长串，留空则关闭 root 自助授权 |
 | `ignoreOfficialAccounts` | 是否默认忽略公众号消息 |
 | `activeGroupCooldownSeconds` | 群聊活跃模式冷却秒数 |
+| `superActiveGroupCooldownSeconds` | 群聊超级活跃模式冷却秒数 |
+| `talkativeGroupCooldownSeconds` | 群聊话唠模式冷却秒数 |
 | `reminderFollowupIntervalMinutes` | 连续提醒多次时的间隔分钟数 |
 | `debugMessageTypes` | 是否在日志输出微信消息类型 |
 | `multimodalEnabled` | 是否启用多模态 |
@@ -250,35 +254,35 @@ generatedFilesPath: "./data/generated"
 查看状态：
 
 ```bash
-systemctl status chatgpt-on-wechat.service
+systemctl status my-wechat-bot.service
 ```
 
 实时日志：
 
 ```bash
-journalctl -u chatgpt-on-wechat.service -f
+journalctl -u my-wechat-bot.service -f
 ```
 
 重启：
 
 ```bash
-systemctl restart chatgpt-on-wechat.service
+systemctl restart my-wechat-bot.service
 ```
 
 停止：
 
 ```bash
-systemctl stop chatgpt-on-wechat.service
+systemctl stop my-wechat-bot.service
 ```
 
 更新代码：
 
 ```bash
-cd /opt/chatgpt-on-wechat
+cd /opt/my-wechat-bot
 git pull
 /opt/node-v16.20.2-linux-x64/bin/npm install
 /opt/node-v16.20.2-linux-x64/bin/npm run build
-systemctl restart chatgpt-on-wechat.service
+systemctl restart my-wechat-bot.service
 ```
 
 ## 使用方式
@@ -324,26 +328,32 @@ systemctl restart chatgpt-on-wechat.service
 
 - `quiet`：安静模式，只在被 @ 或触发词出现时回复。
 - `smart`：智能模式，被明显问到或需要工具时回复。
-- `active`：活跃模式，会更积极参与，但有冷却时间，避免刷屏。
+- `active`：活跃模式，会更积极参与，默认 30 秒冷却。
+- `super_active`：超级活跃模式，更积极接话，默认 15 秒冷却。
+- `talkative`：话唠模式，高频参与聊天，默认 5 秒冷却。
 
 推荐切换方式：
 
 ```text
-#模式
-#安静
-#智能
-#活跃
+/模式
+/安静
+/智能
+/活跃
+/超活跃
+/话唠
 ```
 
-`#模式` 会回复菜单：
+`/模式` 会回复菜单：
 
 ```text
-#1 安静
-#2 智能
-#3 活跃
+/1 安静
+/2 智能
+/3 活跃
+/4 超级活跃
+/5 话唠
 ```
 
-你可以直接回复 `#1` / `#2` / `#3` 切换。
+你可以直接回复 `/1` / `/2` / `/3` / `/4` / `/5` 切换。
 
 也支持自然语言，例如：
 
@@ -380,7 +390,7 @@ systemctl restart chatgpt-on-wechat.service
 
 - 安静模式：群里随机发图不会处理；只有 @ 或触发词问它时才会理解最近媒体。
 - 智能模式：群里随机发图不会处理；明显问到机器人时才会理解最近媒体。
-- 活跃模式：文本聊天会更积极参与，但随机裸发图片、语音、视频仍不会主动调用多模态模型。
+- 活跃、超级活跃、话唠模式：文本聊天会更积极参与，但随机裸发图片、语音、视频仍不会主动调用多模态模型。
 
 也就是说，单纯乱发图片不会消耗 `visionModel`。机器人只会在当前群缓存最近几条媒体一小段时间，等有人明确问“这张图/刚才的视频/这条语音”时再调用模型。
 
@@ -501,8 +511,8 @@ apt-get install -y ffmpeg
 文件会保存到 `generatedFilesPath`，并通过微信发回当前私聊或群聊。代码执行属于高风险任务，机器人会先要求确认：
 
 ```text
-#确认执行
-#取消
+/确认执行
+/取消
 ```
 
 代码运行只支持临时 Python / JavaScript 文件，使用超时和输出截断，不通过 shell 执行。
@@ -536,17 +546,17 @@ your-long-root-token
 root 支持：
 
 ```text
-#root帮助
-#好友列表
-#群列表
-#会话列表
-#白名单
-#允许 3
-#禁止 3
-#总结 3
+/root帮助
+/好友列表
+/群列表
+/会话列表
+/白名单
+/允许 3
+/禁止 3
+/总结 3
 ```
 
-默认好友和群都允许聊天；root 可以用 `#禁止 编号` 关闭某个好友或群的回复，用 `#允许 编号` 恢复。编号来自最近一次 `#好友列表`、`#群列表` 或 `#会话列表`。
+默认好友和群都允许聊天；root 可以用 `/禁止 编号` 关闭某个好友或群的回复，用 `/允许 编号` 恢复。编号来自最近一次 `/好友列表`、`/群列表` 或 `/会话列表`。
 
 公众号消息默认不回复，避免订阅号推送消耗 token。
 
@@ -555,7 +565,7 @@ root 支持：
 默认数据文件：
 
 ```bash
-/opt/chatgpt-on-wechat/data/bot-store.json
+/opt/my-wechat-bot/data/bot-store.json
 ```
 
 包含：
@@ -571,12 +581,12 @@ root 支持：
 
 `data/` 已加入 `.gitignore`，不会提交到仓库。
 
-消息记录会按会话保留最近一批，并有全局上限；模型上下文仍只取 `historyMessageLimit` 条最近消息，避免聊天记录无限增长导致每次对话越来越贵。
+消息记录按会话持续保留，不会因为超过 `historyMessageLimit` 自动删除。`historyMessageLimit` 只控制每次对话带入模型的最近消息条数，用来避免聊天记录越积越多后每次请求都变贵。
 
 建议定期备份：
 
 ```bash
-tar -czf /root/mywechatbot-data-$(date +%F).tar.gz /opt/chatgpt-on-wechat/data
+tar -czf /root/mywechatbot-data-$(date +%F).tar.gz /opt/my-wechat-bot/data
 ```
 
 ## 常见问题
@@ -631,13 +641,15 @@ replyMaxSegments: 8
 
 - 安静模式：必须 @ 或触发词。
 - 智能模式：只有明显问到机器人或需要工具时回复。
-- 活跃模式：更积极，但有冷却时间。
+- 活跃模式：更积极，但有 30 秒冷却。
+- 超级活跃模式：更积极接话，默认 15 秒冷却。
+- 话唠模式：高频聊天，默认 5 秒冷却。
 
 可以在群里说：
 
 ```text
-#模式
-#活跃
+/模式
+/活跃
 ```
 
 ### 如何确认 API 是否正常？
@@ -645,7 +657,7 @@ replyMaxSegments: 8
 重启服务后日志里应有：
 
 ```text
-ChatGPT starts success, ready to handle message!
+Companion starts success, ready to handle message!
 ```
 
 也可以私聊发送：

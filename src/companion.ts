@@ -131,12 +131,12 @@ interface RootListEntry {
   chatName: string;
 }
 
-export class ChatGPTBot {
+export class WechatCompanion {
   botName: string = "";
   startTime: Date = new Date();
   disableSelfChat: boolean = false;
-  chatgptTriggerKeyword: string = Config.chatgptTriggerKeyword;
-  chatgptErrorMessage: string = "ChatGPT摆烂了，请稍后再试～";
+  legacyTriggerKeyword: string = Config.legacyTriggerKeyword;
+  companionErrorMessage: string = "我这边刚刚卡了一下，等会儿再试试。";
   SINGLE_MESSAGE_MAX_SIZE: number = 500;
 
   private store = new BotStore(Config.botDataPath);
@@ -153,11 +153,6 @@ export class ChatGPTBot {
   private readonly pendingMediaLimit = 6;
   private readonly pendingApprovalTtlMs = 10 * 60 * 1000;
 
-  private chatgptModelConfig: object = {
-    model: Config.openaiModel,
-    temperature: 0.8,
-  };
-
   private get currentDate(): string {
     return this.formatLocalDate(new Date());
   }
@@ -166,9 +161,9 @@ export class ChatGPTBot {
     return this.formatLocalDateTime(new Date());
   }
 
-  private get chatgptSystemContent(): string {
+  private get companionSystemContent(): string {
     return [
-      "你是一个接入微信的 Qwen 系列智能助手。",
+      "你是一个接入微信的口袋搭子，名字可以跟随当前微信账号。",
       "你的风格自然、温暖、有分寸，像一个可靠的朋友和工具人。",
       "你会记住用户明确交代的重要信息，但不要编造不存在的记忆。",
       "你支持私聊和群聊定时提醒；不要声称群聊不能定时，除非系统明确报错。",
@@ -184,10 +179,10 @@ export class ChatGPTBot {
   }
 
   private get chatGroupTriggerKeyword(): string {
-    return `@${this.botName} ${this.chatgptTriggerKeyword || ""}`;
+    return `@${this.botName} ${this.legacyTriggerKeyword || ""}`;
   }
 
-  async startGPTBot() {
+  async startCompanion() {
     try {
       this.openaiAccountConfig = new Configuration({
         organization: Config.openaiOrganizationID,
@@ -195,7 +190,7 @@ export class ChatGPTBot {
         basePath: Config.openaiBasePath || undefined,
       });
       this.openaiApiInstance = new OpenAIApi(this.openaiAccountConfig);
-      console.log(`🤖️ ChatGPT name is: ${this.botName}`);
+      console.log(`🤖️ Companion name is: ${this.botName}`);
       console.log(
         `🎯 Private chat auto reply is: ${Config.privateAutoReply ? "on" : "off"}`
       );
@@ -209,7 +204,7 @@ export class ChatGPTBot {
         "startup",
         0.2
       );
-      console.log(`✅ ChatGPT starts success, ready to handle message!`);
+      console.log(`✅ Companion starts success, ready to handle message!`);
     } catch (e) {
       console.error(`❌ ${e}`);
     }
@@ -266,7 +261,7 @@ export class ChatGPTBot {
         [
           "我现在支持：",
           "1. 私聊直接对话，不需要 Hi bot:",
-          "2. 群聊可用 #模式 / #安静 / #智能 / #活跃 切换模式",
+          "2. 群聊可用 /模式、/安静、/智能、/活跃、/超活跃、/话唠 切换模式",
           "3. 自然语言让我记住信息、查询记忆、设置提醒",
           "4. 说“总结今天”或“今天 token 消耗”查看总结",
         ].join("\n")
@@ -290,7 +285,7 @@ export class ChatGPTBot {
   ): Promise<boolean> {
     if (this.isRootAuthText(text)) {
       this.store.addRootUser(context.talkerId, context.talkerName);
-      await this.replyToContext(message, context, "添加 root 成功。发送 #root帮助 查看管理命令。");
+      await this.replyToContext(message, context, "添加 root 成功。发送 /root帮助 查看管理命令。");
       return true;
     }
 
@@ -299,26 +294,28 @@ export class ChatGPTBot {
     }
 
     const compact = text.trim();
-    if (!compact.startsWith("#")) {
+    if (!compact.startsWith("/")) {
       return false;
     }
 
-    if (/^#root帮助$/.test(compact)) {
+    if (/^\/root帮助$/.test(compact)) {
       await this.replyToContext(message, context,
         [
           "root 命令：",
-          "#好友列表 / #群列表 / #会话列表",
-          "#白名单",
-          "#允许 编号",
-          "#禁止 编号",
-          "#总结 编号",
-          "#root列表",
+          "/好友列表",
+          "/群列表",
+          "/会话列表",
+          "/白名单",
+          "/允许 编号",
+          "/禁止 编号",
+          "/总结 编号",
+          "/root列表",
         ].join("\n")
       );
       return true;
     }
 
-    if (/^#root列表$/.test(compact)) {
+    if (/^\/root列表$/.test(compact)) {
       const roots = this.store.getRootUsers();
       await this.replyToContext(message, context,
         roots.length
@@ -328,7 +325,7 @@ export class ChatGPTBot {
       return true;
     }
 
-    if (/^#白名单$/.test(compact)) {
+    if (/^\/白名单$/.test(compact)) {
       const rules = this.store.getChatAccessRules();
       await this.replyToContext(message, context,
         rules.length
@@ -340,39 +337,39 @@ export class ChatGPTBot {
                   }] ${rule.chatName}`
               )
               .join("\n")
-          : "当前没有显式白/黑名单规则。默认允许好友和群，root 可以用 #禁止 编号 关闭某个会话。"
+          : "当前没有显式白/黑名单规则。默认允许好友和群，root 可以用 /禁止 编号 关闭某个会话。"
       );
       return true;
     }
 
-    if (/^#好友列表$/.test(compact)) {
+    if (/^\/好友列表$/.test(compact)) {
       const contacts = await this.listContactsForRoot();
       this.rootLastListByUser.set(context.talkerId, contacts);
       await this.replyToContext(message, context, this.formatRootList(contacts, "好友列表"));
       return true;
     }
 
-    if (/^#群列表$/.test(compact)) {
+    if (/^\/群列表$/.test(compact)) {
       const rooms = await this.listRoomsForRoot();
       this.rootLastListByUser.set(context.talkerId, rooms);
       await this.replyToContext(message, context, this.formatRootList(rooms, "群列表"));
       return true;
     }
 
-    if (/^#会话列表$/.test(compact)) {
+    if (/^\/会话列表$/.test(compact)) {
       const chats = this.store.getKnownChats().map((chat) => this.knownChatToRootEntry(chat));
       this.rootLastListByUser.set(context.talkerId, chats);
       await this.replyToContext(message, context, this.formatRootList(chats, "已知会话"));
       return true;
     }
 
-    const accessMatch = compact.match(/^#(允许|禁止|剔除|拉黑)\s*(\d+|.+)$/);
+    const accessMatch = compact.match(/^\/(允许|禁止|剔除|拉黑)\s*(\d+|.+)$/);
     if (accessMatch) {
       const status: ChatAccessStatus =
         accessMatch[1] === "允许" ? "allow" : "deny";
       const target = this.resolveRootListEntry(context.talkerId, accessMatch[2]);
       if (!target) {
-        await this.replyToContext(message, context, "没找到这个编号。请先发送 #好友列表、#群列表 或 #会话列表。");
+        await this.replyToContext(message, context, "没找到这个编号。请先发送 /好友列表、/群列表 或 /会话列表。");
         return true;
       }
       this.store.setChatAccess(target, status, context.talkerName);
@@ -384,11 +381,11 @@ export class ChatGPTBot {
       return true;
     }
 
-    const summaryMatch = compact.match(/^#总结\s*(\d+|.+)$/);
+    const summaryMatch = compact.match(/^\/总结\s*(\d+|.+)$/);
     if (summaryMatch) {
       const target = this.resolveRootListEntry(context.talkerId, summaryMatch[1]);
       if (!target) {
-        await this.replyToContext(message, context, "没找到这个编号。请先发送 #会话列表。");
+        await this.replyToContext(message, context, "没找到这个编号。请先发送 /会话列表。");
         return true;
       }
       await this.replyToContext(message, context, await this.summarizeChatForRoot(target, context));
@@ -404,7 +401,7 @@ export class ChatGPTBot {
       return false;
     }
     const normalized = text.trim();
-    return normalized === token || normalized === `#root ${token}`;
+    return normalized === token || normalized === `/root ${token}`;
   }
 
   private isChatAllowed(context: ChatContext): boolean {
@@ -644,19 +641,19 @@ export class ChatGPTBot {
         return intent.reply || "";
       case "chat":
       default:
-        return this.onChatGPT(text, context);
+        return this.onCompanionChat(text, context);
     }
   }
 
-  private async onChatGPT(text: string, context: ChatContext): Promise<string> {
+  private async onCompanionChat(text: string, context: ChatContext): Promise<string> {
     const messages = this.createMessages(text, context);
     try {
       const result = await this.completeChat(messages, context, "chat");
-      console.log(`🤖️ ChatGPT says: ${result.text}`);
+      console.log(`🤖️ Companion says: ${result.text}`);
       return result.text;
     } catch (e: any) {
       this.logApiError(e);
-      return this.chatgptErrorMessage;
+      return this.companionErrorMessage;
     }
   }
 
@@ -675,7 +672,7 @@ export class ChatGPTBot {
     return [
       {
         role: "system",
-        content: this.chatgptSystemContent,
+        content: this.companionSystemContent,
       },
       {
         role: "system",
@@ -865,7 +862,7 @@ export class ChatGPTBot {
       /(哪些|什么|列表|还有|有没有|查|查看|为什么|没提醒|没有提醒|忘了吗|忘了|昨天|之前|刚才)/.test(
         compact
       );
-    return asksReminder || (context.scope !== "system" && /^#提醒$/.test(compact));
+    return asksReminder || (context.scope !== "system" && /^\/提醒$/.test(compact));
   }
 
   private parseReminderDate(text: string, now: Date) {
@@ -1004,9 +1001,9 @@ export class ChatGPTBot {
       "如果用户要求生成文件、整理日程表、执行代码、做多步骤规划，使用 agent_task。",
       "agent_task 需要给出 agentTool：schedule_document、file_create、code_run 或 plan_only；执行代码 risk 为 high。",
       "如果用户要求总结今天/本群/当前对话，使用 summarize_today。",
-      "如果用户询问 token、消耗、调用次数，使用 usage_report。",
-      "如果群聊用户想调整机器人发言频率，使用 set_group_mode，并给出 mode：quiet、smart 或 active。",
-      "quiet 表示少说话、只在被点名时回复；smart 表示正常智能判断；active 表示更主动参与。",
+      "只有当用户明确询问 API、模型、token 的消耗/用量/统计/费用/调用次数时，才使用 usage_report；如果 token 只是书名、标题、搜索词或普通话题的一部分，必须保持 chat。",
+      "如果群聊用户想调整机器人发言频率，使用 set_group_mode，并给出 mode：quiet、smart、active、super_active 或 talkative。",
+      "quiet 表示少说话、只在被点名时回复；smart 表示正常智能判断；active 表示更主动参与；super_active 表示更高频参与；talkative 表示话唠模式。",
       `当前日期：${this.currentDate}`,
       `当前时间：${this.currentDateTime}`,
       `会话：${context.chatName}`,
@@ -1060,7 +1057,7 @@ export class ChatGPTBot {
     const memoryText = memories
       .map((memory, index) => `${index + 1}. ${memory.content}`)
       .join("\n");
-    return this.onChatGPT(
+    return this.onCompanionChat(
       `用户正在查询记忆：“${query}”。请根据这些记忆自然回答，不要编造：\n${memoryText}`,
       context
     );
@@ -1194,7 +1191,7 @@ export class ChatGPTBot {
       return [
         `这个任务需要确认后执行：${this.describeAgentTool(tool)}`,
         `风险等级：${intent.risk || "high"}`,
-        "请回复 #确认执行 继续，或回复 #取消 放弃。",
+        "请回复 /确认执行 继续，或回复 /取消 放弃。",
         `确认编号：${approval.id}`,
       ].join("\n");
     }
@@ -1212,7 +1209,7 @@ export class ChatGPTBot {
       return this.createAgentPlan(text, context);
     }
     if (tool === "code_run") {
-      return "执行代码属于高风险操作，需要回复 #确认执行 后才会运行。";
+      return "执行代码属于高风险操作，需要回复 /确认执行 后才会运行。";
     }
     return this.createAgentPlan(text, context);
   }
@@ -1456,11 +1453,11 @@ export class ChatGPTBot {
     if (!approval) {
       return null;
     }
-    if (/^#?(取消|放弃|不执行|cancel)$/i.test(compact)) {
+    if (/^\/?(取消|放弃|不执行|cancel)$/i.test(compact)) {
       this.pendingApprovals.delete(context.chatId);
       return "已取消这个待确认任务。";
     }
-    if (!/^#?(确认执行|确认|执行|yes|ok)$/i.test(compact)) {
+    if (!/^\/?(确认执行|确认|执行|yes|ok)$/i.test(compact)) {
       return null;
     }
     this.pendingApprovals.delete(context.chatId);
@@ -2281,19 +2278,103 @@ export class ChatGPTBot {
       return direct || modeSwitch || this.looksAddressedToBot(text);
     }
 
+    if (mode === "active") {
+      return this.shouldSpeakInActiveGroup(text, context, {
+        direct,
+        modeSwitch,
+        cooldownSeconds: Config.activeGroupCooldownSeconds,
+        casual: false,
+        talkative: false,
+      });
+    }
+
+    if (mode === "super_active") {
+      return this.shouldSpeakInActiveGroup(text, context, {
+        direct,
+        modeSwitch,
+        cooldownSeconds: Config.superActiveGroupCooldownSeconds,
+        casual: true,
+        talkative: false,
+      });
+    }
+
+    if (mode === "talkative") {
+      return this.shouldSpeakInActiveGroup(text, context, {
+        direct,
+        modeSwitch,
+        cooldownSeconds: Config.talkativeGroupCooldownSeconds,
+        casual: true,
+        talkative: true,
+      });
+    }
+
+    return direct || modeSwitch || this.looksAddressedToBot(text);
+  }
+
+  private shouldSpeakInActiveGroup(
+    text: string,
+    context: ChatContext,
+    options: {
+      direct: boolean;
+      modeSwitch: boolean;
+      cooldownSeconds: number;
+      casual: boolean;
+      talkative: boolean;
+    }
+  ): boolean {
     const now = Date.now();
     const lastReplyAt = this.lastGroupReplyAt.get(context.chatId) || 0;
-    const cooledDown = now - lastReplyAt > Config.activeGroupCooldownSeconds * 1000;
+    const cooledDown = now - lastReplyAt > options.cooldownSeconds * 1000;
+    const casualCue = options.casual && this.looksLikeConversationalCue(text);
+    const talkativeCue = options.talkative && this.looksWorthCasualReply(text);
     const shouldSpeak =
-      direct ||
-      modeSwitch ||
+      options.direct ||
+      options.modeSwitch ||
       this.looksAddressedToBot(text) ||
       this.mayNeedTool(text, context) ||
-      (cooledDown && this.looksLikeOpenQuestion(text));
+      (cooledDown &&
+        (this.looksLikeOpenQuestion(text) || casualCue || talkativeCue));
     if (shouldSpeak) {
       this.lastGroupReplyAt.set(context.chatId, now);
     }
     return shouldSpeak;
+  }
+
+  private looksLikeConversationalCue(text: string): boolean {
+    const compact = text.replace(/\s+/g, "");
+    if (this.isLowSignalGroupText(compact)) {
+      return false;
+    }
+    return /[?？]|怎么|为什么|咋办|感觉|是不是|要不要|可以|离谱|有点|笑死|确实|真的假的|有人|谁/.test(
+      compact
+    );
+  }
+
+  private looksWorthCasualReply(text: string): boolean {
+    const compact = text.replace(/\s+/g, "");
+    if (this.isLowSignalGroupText(compact)) {
+      return false;
+    }
+    return (
+      compact.length >= 6 ||
+      this.looksLikeOpenQuestion(compact) ||
+      this.looksLikeConversationalCue(compact)
+    );
+  }
+
+  private isLowSignalGroupText(text: string): boolean {
+    if (!text) {
+      return true;
+    }
+    if (/^https?:\/\//i.test(text)) {
+      return true;
+    }
+    if (/^[\p{P}\p{S}\s]+$/u.test(text)) {
+      return true;
+    }
+    return /^(嗯+|哦+|噢+|好+|行+|可以+|哈哈+|hh+|ok|收到|对|是)$/i.test(
+      text
+    );
   }
 
   private cleanMessage(rawText: string, context: ChatContext): string {
@@ -2304,8 +2385,8 @@ export class ChatGPTBot {
         text = text.slice(mention.length).trimStart();
       }
     }
-    if (this.chatgptTriggerKeyword && text.startsWith(this.chatgptTriggerKeyword)) {
-      text = text.slice(this.chatgptTriggerKeyword.length);
+    if (this.legacyTriggerKeyword && text.startsWith(this.legacyTriggerKeyword)) {
+      text = text.slice(this.legacyTriggerKeyword.length);
     }
     return text;
   }
@@ -2579,27 +2660,40 @@ export class ChatGPTBot {
   }
 
   private isGroupMode(mode: unknown): mode is GroupMode {
-    return ["quiet", "smart", "active"].includes(String(mode));
+    return ["quiet", "smart", "active", "super_active", "talkative"].includes(
+      String(mode)
+    );
   }
 
   private mayNeedTool(text: string, context?: ChatContext): boolean {
+    const compact = text.replace(/\s+/g, "");
     return (
-      /记住|记一下|保存|存一下|提醒|闹钟|别忘|定时|总结|复盘|消耗|用量|花了多少|我之前|之前说|安排|ddl|deadline|考试|作业|日程表|计划表|文件|文档|表格|报告|执行代码|运行代码|跑代码|python|javascript|node/i.test(
-        text
+      /记住|记一下|保存|存一下|帮我存|收纳一下|我之前|之前说|总结|复盘/i.test(
+        compact
       ) ||
+      this.looksLikeReminderCreateRequest(text) ||
+      Boolean(context && this.isReminderListRequest(text, context)) ||
+      this.isUsageReportRequest(text) ||
+      /日程表|计划表|复习计划|考试安排|ddl|deadline|待办表|整理成.*表|生成.*表格/i.test(
+        compact
+      ) ||
+      /生成.*(文件|文档|报告|markdown|md|txt|csv)|写一份.*(文档|报告)|导出.*(文件|文档)/i.test(
+        compact
+      ) ||
+      /执行代码|运行代码|跑代码|```|python|javascript|node/i.test(compact) ||
       (context?.scope === "group" && this.looksLikeModeSwitchRequest(text))
     );
   }
 
   private startsWithTrigger(text: string): boolean {
     return Boolean(
-      this.chatgptTriggerKeyword && text.startsWith(this.chatgptTriggerKeyword)
+      this.legacyTriggerKeyword && text.startsWith(this.legacyTriggerKeyword)
     );
   }
 
   private isApprovalReplyText(text: string): boolean {
     const compact = text.replace(/\s+/g, "");
-    return /^#?(确认执行|确认|执行|取消|放弃|不执行|yes|ok|cancel)$/i.test(
+    return /^\/?(确认执行|确认|执行|取消|放弃|不执行|yes|ok|cancel)$/i.test(
       compact
     );
   }
@@ -2628,25 +2722,33 @@ export class ChatGPTBot {
     text: string
   ): { type: "none" } | { type: "menu" } | { type: "switch"; mode: GroupMode } {
     const compact = text.replace(/\s+/g, "");
-    if (/^#(模式|群模式|机器人模式|mode|help|\?)$/i.test(compact)) {
+    if (/^\/(模式|群模式|机器人模式|mode|help|\?)$/i.test(compact)) {
       return { type: "menu" };
     }
-    if (/^#([123])$/.test(compact)) {
+    if (/^\/([12345])$/.test(compact)) {
       const modeMap: Record<string, GroupMode> = {
         "1": "quiet",
         "2": "smart",
         "3": "active",
+        "4": "super_active",
+        "5": "talkative",
       };
       return { type: "switch", mode: modeMap[compact.slice(1)] };
     }
-    if (/^#(安静|静默|少说话|quiet|silent)$/.test(compact)) {
+    if (/^\/(安静|静默|少说话|quiet|silent)$/.test(compact)) {
       return { type: "switch", mode: "quiet" };
     }
-    if (/^#(智能|正常|默认|smart|normal)$/.test(compact)) {
+    if (/^\/(智能|正常|默认|smart|normal)$/.test(compact)) {
       return { type: "switch", mode: "smart" };
     }
-    if (/^#(活跃|主动|积极|多说话|active)$/.test(compact)) {
+    if (/^\/(活跃|主动|积极|多说话|active)$/.test(compact)) {
       return { type: "switch", mode: "active" };
+    }
+    if (/^\/(超级活跃|超活跃|很活跃|superactive|super_active)$/.test(compact)) {
+      return { type: "switch", mode: "super_active" };
+    }
+    if (/^\/(话唠|畅聊|talkative|chatty)$/.test(compact)) {
+      return { type: "switch", mode: "talkative" };
     }
     if (/^(群聊模式|群模式|机器人模式|切换模式|模式切换)$/.test(compact)) {
       return { type: "menu" };
@@ -2657,6 +2759,21 @@ export class ChatGPTBot {
 
   private parseNaturalGroupMode(text: string): GroupMode | null {
     const compact = text.replace(/\s+/g, "");
+    if (/安静一点|少说话|别太主动|别刷屏|只@/.test(compact)) {
+      return "quiet";
+    }
+    if (/恢复正常|正常回复|默认模式|智能一点/.test(compact)) {
+      return "smart";
+    }
+    if (/话唠|畅聊|特别能聊|多聊点|话多一点/.test(compact)) {
+      return "talkative";
+    }
+    if (/超级活跃|超活跃|更活跃|很活跃/.test(compact)) {
+      return "super_active";
+    }
+    if (/活跃一点|积极一点|多说点|主动一点/.test(compact)) {
+      return "active";
+    }
     const looksLikeModeCommand =
       /群聊模式|群模式|机器人模式|进入.*模式|切换.*模式|改成.*模式/.test(
         compact
@@ -2670,6 +2787,12 @@ export class ChatGPTBot {
     if (/智能|聪明|正常|默认/.test(compact)) {
       return "smart";
     }
+    if (/话唠|畅聊|特别能聊|多聊/.test(compact)) {
+      return "talkative";
+    }
+    if (/超级活跃|超活跃|很活跃|更活跃/.test(compact)) {
+      return "super_active";
+    }
     if (/活跃|主动|积极|多说话/.test(compact)) {
       return "active";
     }
@@ -2677,7 +2800,7 @@ export class ChatGPTBot {
   }
 
   private looksLikeModeSwitchRequest(text: string): boolean {
-    return /群聊模式|群模式|机器人模式|切换模式|进入.*模式|改成.*模式|安静一点|少说话|别太主动|活跃一点|积极一点|多说点|正常回复|默认模式/i.test(
+    return /群聊模式|群模式|机器人模式|切换模式|进入.*模式|改成.*模式|安静一点|少说话|别太主动|活跃一点|超级活跃|超活跃|话唠|多聊点|积极一点|多说点|正常回复|默认模式/i.test(
       text.replace(/\s+/g, "")
     );
   }
@@ -2685,10 +2808,12 @@ export class ChatGPTBot {
   private groupModeMenu(): string {
     return [
       "群聊模式：",
-      "#1 安静：只在被 @ 或触发词出现时回复",
-      "#2 智能：明显问到我或需要工具时回复",
-      "#3 活跃：更主动参与，但有冷却时间",
-      "也可以直接发：#安静 / #智能 / #活跃",
+      "/1 安静：只在被 @ 或触发词出现时回复",
+      "/2 智能：明显问到我或需要工具时回复",
+      `/3 活跃：更主动参与，${Config.activeGroupCooldownSeconds} 秒冷却`,
+      `/4 超活跃：更积极接话，${Config.superActiveGroupCooldownSeconds} 秒冷却`,
+      `/5 话唠：高频聊天，${Config.talkativeGroupCooldownSeconds} 秒冷却`,
+      "也可以直接发：/安静 /智能 /活跃 /超活跃 /话唠",
     ].join("\n");
   }
 
@@ -2696,7 +2821,9 @@ export class ChatGPTBot {
     const descriptions: Record<GroupMode, string> = {
       quiet: "安静模式：只在被 @ 或触发词出现时回复",
       smart: "智能模式：被明显问到或需要工具时回复",
-      active: "活跃模式：会更积极参与，但仍有冷却时间避免刷屏",
+      active: `活跃模式：会更积极参与，${Config.activeGroupCooldownSeconds} 秒冷却`,
+      super_active: `超级活跃模式：更积极接话，${Config.superActiveGroupCooldownSeconds} 秒冷却`,
+      talkative: `话唠模式：更像群友聊天，${Config.talkativeGroupCooldownSeconds} 秒冷却`,
     };
     return descriptions[mode];
   }

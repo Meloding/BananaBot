@@ -1,13 +1,13 @@
 import QRCode from "qrcode";
 import { WechatyBuilder } from "wechaty";
-import { ChatGPTBot } from "./chatgpt.js";
+import { WechatCompanion } from "./companion.js";
 
 // Wechaty instance
 const weChatBot = WechatyBuilder.build({
   name: "my-wechat-bot",
 });
-// ChatGPTBot instance
-const chatGPTBot = new ChatGPTBot();
+// WechatCompanion instance
+const companion = new WechatCompanion();
 
 async function main() {
   weChatBot
@@ -22,9 +22,9 @@ async function main() {
     // login to WeChat desktop account
     .on("login", async (user: any) => {
       console.log(`✅ User ${user} has logged in`);
-      chatGPTBot.setBotName(user.name());
-      await chatGPTBot.startGPTBot();
-      chatGPTBot.startReminderLoop(weChatBot);
+      companion.setBotName(user.name());
+      await companion.startCompanion();
+      companion.startReminderLoop(weChatBot);
     })
     // keep recoverable puppet errors from crashing the process
     .on("error", (error: any) => {
@@ -36,17 +36,17 @@ async function main() {
         // prevent accidentally respond to history chat on restart
         // only respond to message later than chatbot start time
         const msgDate = message.date();
-        if (msgDate.getTime() <= chatGPTBot.startTime.getTime()) {
+        if (msgDate.getTime() <= companion.startTime.getTime()) {
           return;
         }
         console.log(`📨 ${message}`);
         // handle message for customized task handlers
-        const handled = await chatGPTBot.onCustimzedTask(message);
+        const handled = await companion.onCustimzedTask(message);
         if (handled) {
           return;
         }
-        // handle message for chatGPT bot
-        await chatGPTBot.onMessage(message);
+        // handle message for companion bot
+        await companion.onMessage(message);
       } catch (e) {
         console.error(`❌ ${e}`);
       }

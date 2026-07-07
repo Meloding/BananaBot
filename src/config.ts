@@ -19,7 +19,8 @@ else {
     openaiBasePath: process.env.OPENAI_BASE_PATH,
     openaiModel: process.env.OPENAI_MODEL,
     agentModel: process.env.AGENT_MODEL,
-    chatgptTriggerKeyword: process.env.CHATGPT_TRIGGER_KEYWORD,
+    legacyTriggerKeyword:
+      process.env.LEGACY_TRIGGER_KEYWORD || process.env.CHATGPT_TRIGGER_KEYWORD,
     privateAutoReply: process.env.PRIVATE_AUTO_REPLY,
     defaultGroupMode: process.env.DEFAULT_GROUP_MODE,
     botDataPath: process.env.BOT_DATA_PATH,
@@ -28,6 +29,9 @@ else {
     rootAuthToken: process.env.ROOT_AUTH_TOKEN,
     ignoreOfficialAccounts: process.env.IGNORE_OFFICIAL_ACCOUNTS,
     activeGroupCooldownSeconds: process.env.ACTIVE_GROUP_COOLDOWN_SECONDS,
+    superActiveGroupCooldownSeconds:
+      process.env.SUPER_ACTIVE_GROUP_COOLDOWN_SECONDS,
+    talkativeGroupCooldownSeconds: process.env.TALKATIVE_GROUP_COOLDOWN_SECONDS,
     reminderFollowupIntervalMinutes: process.env.REMINDER_FOLLOWUP_INTERVAL_MINUTES,
     debugMessageTypes: process.env.DEBUG_MESSAGE_TYPES,
     multimodalEnabled: process.env.MULTIMODAL_ENABLED,
@@ -66,7 +70,8 @@ export const Config: IConfig = {
   openaiBasePath: configFile.openaiBasePath || "",
   openaiModel: configFile.openaiModel || "qwen-plus",
   agentModel: configFile.agentModel || "qwen-turbo",
-  chatgptTriggerKeyword: configFile.chatgptTriggerKeyword || "",
+  legacyTriggerKeyword:
+    configFile.legacyTriggerKeyword || configFile.chatgptTriggerKeyword || "",
   privateAutoReply: parseBoolean(configFile.privateAutoReply, true),
   defaultGroupMode: configFile.defaultGroupMode || "smart",
   botDataPath: configFile.botDataPath || "./data/bot-store.json",
@@ -75,6 +80,12 @@ export const Config: IConfig = {
   rootAuthToken: configFile.rootAuthToken || "",
   ignoreOfficialAccounts: parseBoolean(configFile.ignoreOfficialAccounts, true),
   activeGroupCooldownSeconds: Number(configFile.activeGroupCooldownSeconds || 30),
+  superActiveGroupCooldownSeconds: Number(
+    configFile.superActiveGroupCooldownSeconds || 15
+  ),
+  talkativeGroupCooldownSeconds: Number(
+    configFile.talkativeGroupCooldownSeconds || 5
+  ),
   reminderFollowupIntervalMinutes: Number(
     configFile.reminderFollowupIntervalMinutes || 5
   ),
