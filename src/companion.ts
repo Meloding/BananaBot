@@ -2,6 +2,7 @@ import { Config } from "./config.js";
 import fs from "fs";
 import http from "http";
 import https from "https";
+import crypto from "crypto";
 import os from "os";
 import path from "path";
 import { execFile } from "child_process";
@@ -120,9 +121,15 @@ interface PendingMediaMessage {
   message: Message;
   messageType: MessageType;
   typeName: string;
+  cacheKey: string;
   timestamp: number;
   talkerName: string;
   processedText?: string;
+}
+
+interface EmoticonCacheEntry {
+  meaning: string;
+  timestamp: number;
 }
 
 interface RootListEntry {
@@ -145,13 +152,20 @@ export class WechatCompanion {
   private weChatBot: any;
   private reminderLoopStarted = false;
   private lastGroupReplyAt: Map<string, number> = new Map();
+  private lastMediaAutoProcessAt: Map<string, number> = new Map();
   private pendingMediaByChat: Map<string, PendingMediaMessage[]> = new Map();
   private pendingApprovals: Map<string, PendingApproval> = new Map();
   private pendingFilesByChat: Map<string, string[]> = new Map();
   private rootLastListByUser: Map<string, RootListEntry[]> = new Map();
+  private emoticonMeaningCache: Map<string, EmoticonCacheEntry> = new Map();
+  private lastEmoticonReplyByChat: Map<string, { key: string; timestamp: number }> =
+    new Map();
   private readonly pendingMediaTtlMs = 10 * 60 * 1000;
   private readonly pendingMediaLimit = 6;
   private readonly pendingApprovalTtlMs = 10 * 60 * 1000;
+  private readonly mediaAutoProcessCooldownMs = 60 * 1000;
+  private readonly emoticonBurstCooldownMs = 15 * 1000;
+  private readonly emoticonRepeatCooldownMs = 2 * 60 * 1000;
 
   private get currentDate(): string {
     return this.formatLocalDate(new Date());
@@ -1787,12 +1801,31 @@ export class WechatCompanion {
     messageType: MessageType
   ) {
     const typeName = MessageType[messageType] || "Unknown";
+    const cacheKey = this.mediaCacheKey(message, messageType);
     const shouldProcess = this.shouldProcessMediaMessage(
       message.text() || "",
-      context
+      context,
+      messageType,
+      cacheKey
     );
 
-    this.rememberPendingMedia(message, context, messageType, typeName);
+    this.rememberPendingMedia(message, context, messageType, typeName, cacheKey);
+
+    if (
+      messageType === MessageType.Emoticon &&
+      this.isRepeatedEmoticon(context.chatId, cacheKey)
+    ) {
+      const cached = this.emoticonMeaningCache.get(cacheKey);
+      this.store.addMessage({
+        ...context,
+        role: "user",
+        text: cached
+          ? `[表情包语义] ${cached.meaning}（重复表情，已复用缓存，未重复回复）`
+          : "[Emoticon] 重复表情，未重复处理。",
+        messageType,
+      });
+      return;
+    }
 
     if (!shouldProcess) {
       this.store.addMessage({
@@ -1810,7 +1843,17 @@ export class WechatCompanion {
       understoodText = await this.processMediaMessage(message, context, messageType);
     } catch (error) {
       console.error(`❌ Failed to process ${typeName} message: ${error}`);
-      understoodText = `[${typeName}] 多模态处理失败：${error}`;
+      this.store.addMessage({
+        ...context,
+        role: "user",
+        text: `[${typeName}] 多模态处理失败，已静默：${error}`,
+        messageType,
+      });
+      return;
+    }
+
+    if (!understoodText.trim()) {
+      return;
     }
 
     this.store.addMessage({
@@ -1820,10 +1863,20 @@ export class WechatCompanion {
       messageType,
     });
 
-    const replyMessage = await this.onCompanionChat(
-      `用户发来了一条 ${typeName}，系统理解结果如下。请只基于媒体内容自然回复，不要触发工具或执行任何代码：\n${understoodText}`,
-      context
-    );
+    if (messageType === MessageType.Emoticon) {
+      this.lastEmoticonReplyByChat.set(context.chatId, {
+        key: cacheKey,
+        timestamp: Date.now(),
+      });
+    }
+
+    const replyMessage =
+      messageType === MessageType.Emoticon
+        ? this.formatEmoticonReply(understoodText)
+        : await this.onCompanionChat(
+            `用户发来了一条 ${typeName}，系统理解结果如下。请只基于媒体内容自然回复，不要触发工具或执行任何代码：\n${understoodText}`,
+            context
+          );
     if (replyMessage) {
       const sentMessage = await this.replyToContext(message, context, replyMessage);
       this.store.addMessage({
@@ -1835,14 +1888,45 @@ export class WechatCompanion {
     }
   }
 
-  private shouldProcessMediaMessage(text: string, context: ChatContext): boolean {
+  private shouldProcessMediaMessage(
+    text: string,
+    context: ChatContext,
+    messageType: MessageType,
+    cacheKey: string
+  ): boolean {
+    const direct = this.isMentioned(text) || this.startsWithTrigger(text);
     if (context.scope === "private") {
-      return Config.privateAutoReply || this.startsWithTrigger(text);
+      return (
+        direct ||
+        (Config.privateAutoReply &&
+          messageType !== MessageType.Video &&
+          this.mediaCooldownPassed(context.chatId, messageType, cacheKey))
+      );
     }
-    if (!text.trim()) {
+
+    if (direct) {
+      return true;
+    }
+
+    const mode = this.store.getGroupMode(context.chatId, Config.defaultGroupMode);
+    if (mode === "quiet" || mode === "smart") {
       return false;
     }
-    return this.shouldRespond(text, context);
+
+    if (!this.mediaCooldownPassed(context.chatId, messageType, cacheKey)) {
+      return false;
+    }
+
+    if (messageType === MessageType.Emoticon) {
+      return this.emoticonBurstCooldownPassed(context.chatId);
+    }
+    if (messageType === MessageType.Image) {
+      return mode === "super_active" || mode === "talkative";
+    }
+    if (messageType === MessageType.Audio) {
+      return mode === "talkative";
+    }
+    return false;
   }
 
   private isSupportedMediaMessage(messageType: MessageType): boolean {
@@ -1858,7 +1942,8 @@ export class WechatCompanion {
     message: Message,
     context: ChatContext,
     messageType: MessageType,
-    typeName: string
+    typeName: string,
+    cacheKey: string
   ) {
     if (!this.isSupportedMediaMessage(messageType)) {
       return;
@@ -1869,6 +1954,7 @@ export class WechatCompanion {
       message,
       messageType,
       typeName,
+      cacheKey,
       timestamp: Date.now(),
       talkerName: context.talkerName,
     });
@@ -1876,6 +1962,47 @@ export class WechatCompanion {
       context.chatId,
       pending.slice(-this.pendingMediaLimit)
     );
+  }
+
+  private mediaCooldownPassed(
+    chatId: string,
+    messageType: MessageType,
+    cacheKey: string
+  ): boolean {
+    if (messageType === MessageType.Emoticon && this.emoticonMeaningCache.has(cacheKey)) {
+      return true;
+    }
+    const key = `${chatId}:${messageType}`;
+    const now = Date.now();
+    const last = this.lastMediaAutoProcessAt.get(key) || 0;
+    if (now - last < this.mediaAutoProcessCooldownMs) {
+      return false;
+    }
+    this.lastMediaAutoProcessAt.set(key, now);
+    return true;
+  }
+
+  private isRepeatedEmoticon(chatId: string, cacheKey: string): boolean {
+    const last = this.lastEmoticonReplyByChat.get(chatId);
+    return Boolean(
+      last &&
+        last.key === cacheKey &&
+        Date.now() - last.timestamp < this.emoticonRepeatCooldownMs
+    );
+  }
+
+  private emoticonBurstCooldownPassed(chatId: string): boolean {
+    const last = this.lastEmoticonReplyByChat.get(chatId);
+    return !last || Date.now() - last.timestamp >= this.emoticonBurstCooldownMs;
+  }
+
+  private mediaCacheKey(message: Message, messageType: MessageType): string {
+    const raw = message.text?.() || "";
+    const md5 = raw.match(/md5="([^"]+)"/i)?.[1];
+    const cdnurl = raw.match(/cdnurl="([^"]+)"/i)?.[1];
+    const url = raw.match(/(?:thumburl|encrypturl)="([^"]+)"/i)?.[1];
+    const stable = md5 || cdnurl || url || raw || message.id || `${messageType}`;
+    return `${messageType}:${crypto.createHash("sha1").update(stable).digest("hex")}`;
   }
 
   private async consumeReferencedMediaIfNeeded(
@@ -1988,6 +2115,7 @@ export class WechatCompanion {
       return "[Image] 已收到图片，但多模态功能未开启。";
     }
     const media = await this.readMessageMedia(message, MessageType.Image);
+    const imageUrl = await this.normalizeVisionImageDataUrl(media);
     const result = await this.completeChat(
       [
         {
@@ -1999,7 +2127,7 @@ export class WechatCompanion {
           role: "user",
           content: [
             { type: "text", text: "请理解这张微信图片，并给出对用户有帮助的回答。" },
-            { type: "image_url", image_url: { url: media.dataUrl } },
+            { type: "image_url", image_url: { url: imageUrl } },
           ],
         },
       ],
@@ -2018,19 +2146,25 @@ export class WechatCompanion {
     if (!Config.multimodalEnabled) {
       return "[Emoticon] 已收到表情包，但多模态功能未开启。";
     }
+    const cacheKey = this.mediaCacheKey(message, MessageType.Emoticon);
+    const cached = this.emoticonMeaningCache.get(cacheKey);
+    if (cached) {
+      return `[表情包语义]\n${cached.meaning}`;
+    }
     const media = await this.readMessageMedia(message, MessageType.Emoticon);
+    const imageUrl = await this.normalizeVisionImageDataUrl(media);
     const result = await this.completeChat(
       [
         {
           role: "system",
           content:
-            "你是微信表情包理解模块。请识别表情包的画面、文字、情绪和可能的回复语境。简洁输出。",
+            "你是微信表情包理解模块。请把表情包理解成一句中文短语，包含情绪和大概语境。只输出短语，不要解释。",
         },
         {
           role: "user",
           content: [
-            { type: "text", text: "请理解这个微信表情包的含义。" },
-            { type: "image_url", image_url: { url: media.dataUrl } },
+            { type: "text", text: "请把这个微信表情包转换成一句语义短语。" },
+            { type: "image_url", image_url: { url: imageUrl } },
           ],
         },
       ],
@@ -2039,7 +2173,53 @@ export class WechatCompanion {
       0.2,
       Config.visionModel
     );
-    return `[表情包理解]\n${result.text}`;
+    const meaning = this.cleanEmoticonMeaning(result.text);
+    this.emoticonMeaningCache.set(cacheKey, {
+      meaning,
+      timestamp: Date.now(),
+    });
+    return `[表情包语义]\n${meaning}`;
+  }
+
+  private cleanEmoticonMeaning(text: string): string {
+    return text
+      .replace(/^表情包(语义|含义|理解)[:：]?\s*/i, "")
+      .replace(/^[“"']|[”"']$/g, "")
+      .split(/\n+/)[0]
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 60) || "一个表达情绪的表情包";
+  }
+
+  private formatEmoticonReply(understoodText: string): string {
+    const meaning = this.cleanEmoticonMeaning(
+      understoodText.replace(/^\[表情包语义\]\s*/i, "")
+    );
+    return `表情包大概是：${meaning}`;
+  }
+
+  private async normalizeVisionImageDataUrl(media: MediaFile): Promise<string> {
+    if (/^image\/(jpeg|jpg|png)$/i.test(media.mediaType)) {
+      return media.dataUrl;
+    }
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-vision-"));
+    const ext = media.extension || ".bin";
+    const inputPath = path.join(tempDir, `input${ext}`);
+    const outputPath = path.join(tempDir, "frame.jpg");
+    try {
+      fs.writeFileSync(inputPath, media.buffer);
+      await execFileAsync(
+        "ffmpeg",
+        ["-y", "-i", inputPath, "-frames:v", "1", outputPath],
+        { timeout: 10000 }
+      );
+      const converted = fs.readFileSync(outputPath);
+      return `data:image/jpeg;base64,${converted.toString("base64")}`;
+    } catch {
+      return media.dataUrl;
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   }
 
   private async transcribeAudioMessage(
