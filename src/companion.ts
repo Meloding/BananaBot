@@ -199,7 +199,6 @@ export class WechatCompanion {
   async startCompanion() {
     try {
       this.openaiAccountConfig = new Configuration({
-        organization: Config.openaiOrganizationID,
         apiKey: Config.openaiApiKey,
         basePath: Config.openaiBasePath || undefined,
       });

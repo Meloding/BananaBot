@@ -1,7 +1,8 @@
 {
   "name": "my-wechat-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Personal WeChat companion bot with memory, reminders, multimodal context, and tool routing.",
+  "private": true,
   "main": "src/main.ts",
   "export": "src/main.ts",
   "scripts": {
@@ -9,7 +10,7 @@
     "dev": "nodemon --exec node --watch config.yaml --loader ts-node/esm src/main.ts",
     "build": "tsc"
   },
-  "author": "Michael Huang",
+  "author": "",
   "license": "ISC",
   "dependencies": {
     "dotenv": "^16.0.3",

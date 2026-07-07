@@ -183,7 +183,6 @@ journalctl -u my-wechat-bot.service -f
 
 ```yaml
 openaiApiKey: ""
-openaiOrganizationID: ""
 openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 openaiModel: "qwen-plus"
 agentModel: "qwen-turbo"

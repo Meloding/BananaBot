@@ -1,6 +1,5 @@
 export interface IConfig {
   openaiApiKey: string;
-  openaiOrganizationID?: string;
   openaiBasePath?: string;
   openaiModel: string;
   agentModel: string;

@@ -15,12 +15,10 @@ if (fs.existsSync("./config.yaml")) {
 else {
   configFile = {
     openaiApiKey: process.env.OPENAI_API_KEY,
-    openaiOrganizationID: process.env.OPENAI_ORGANIZATION_KEY,
     openaiBasePath: process.env.OPENAI_BASE_PATH,
     openaiModel: process.env.OPENAI_MODEL,
     agentModel: process.env.AGENT_MODEL,
-    legacyTriggerKeyword:
-      process.env.LEGACY_TRIGGER_KEYWORD || process.env.CHATGPT_TRIGGER_KEYWORD,
+    legacyTriggerKeyword: process.env.LEGACY_TRIGGER_KEYWORD,
     privateAutoReply: process.env.PRIVATE_AUTO_REPLY,
     defaultGroupMode: process.env.DEFAULT_GROUP_MODE,
     botDataPath: process.env.BOT_DATA_PATH,
@@ -66,12 +64,10 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
 
 export const Config: IConfig = {
   openaiApiKey: configFile.openaiApiKey,
-  openaiOrganizationID: configFile.openaiOrganizationID || "",
   openaiBasePath: configFile.openaiBasePath || "",
   openaiModel: configFile.openaiModel || "qwen-plus",
   agentModel: configFile.agentModel || "qwen-turbo",
-  legacyTriggerKeyword:
-    configFile.legacyTriggerKeyword || configFile.chatgptTriggerKeyword || "",
+  legacyTriggerKeyword: configFile.legacyTriggerKeyword || "",
   privateAutoReply: parseBoolean(configFile.privateAutoReply, true),
   defaultGroupMode: configFile.defaultGroupMode || "smart",
   botDataPath: configFile.botDataPath || "./data/bot-store.json",
