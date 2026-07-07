@@ -614,11 +614,73 @@ export class WechatCompanion {
   ): Promise<string> {
     const deterministicIntent = this.parseDeterministicToolIntent(text, context);
     if (deterministicIntent) {
-      return this.handleIntent(deterministicIntent, text, context);
+      const guardedIntent = await this.guardDeterministicIntent(
+        deterministicIntent,
+        text,
+        context
+      );
+      return this.handleIntent(guardedIntent, text, context);
     }
 
     const intent = await this.routeIntentIfNeeded(text, context);
     return this.handleIntent(intent, text, context);
+  }
+
+  private async guardDeterministicIntent(
+    intent: RoutedIntent,
+    text: string,
+    context: ChatContext
+  ): Promise<RoutedIntent> {
+    if (!this.shouldGuardDeterministicIntent(intent) || !Config.agentRouterEnabled) {
+      return intent;
+    }
+
+    const routed = await this.routeIntentIfNeeded(text, context);
+    if (routed.action === "chat" || routed.action === "ignore") {
+      return routed;
+    }
+
+    if (
+      intent.action === "agent_task" &&
+      intent.agentTool === "usage_report_file" &&
+      (routed.action === "usage_report" ||
+        (routed.action === "agent_task" &&
+          ["file_create", "usage_report_file"].includes(
+            String(routed.agentTool || "")
+          )))
+    ) {
+      return intent;
+    }
+
+    if (intent.action === "usage_report" && routed.action === "usage_report") {
+      return intent;
+    }
+
+    if (intent.action === "list_reminders" && routed.action === "list_reminders") {
+      return intent;
+    }
+
+    if (intent.action === "agent_task" && routed.action === "agent_task") {
+      return {
+        ...intent,
+        ...routed,
+        agentTool: routed.agentTool || intent.agentTool,
+        fileType: routed.fileType || intent.fileType,
+        code: routed.code || intent.code,
+        codeLanguage: routed.codeLanguage || intent.codeLanguage,
+        risk: routed.risk || intent.risk,
+      };
+    }
+
+    return routed;
+  }
+
+  private shouldGuardDeterministicIntent(intent: RoutedIntent): boolean {
+    return (
+      intent.action === "agent_task" ||
+      intent.action === "usage_report" ||
+      intent.action === "list_reminders"
+    );
   }
 
   private async handleIntent(
