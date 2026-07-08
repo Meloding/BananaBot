@@ -45,6 +45,9 @@ else {
     stripMarkdown: process.env.STRIP_MARKDOWN,
     allowGlobalUsageReport: process.env.ALLOW_GLOBAL_USAGE_REPORT,
     generatedFilesPath: process.env.GENERATED_FILES_PATH,
+    statusPageEnabled: process.env.STATUS_PAGE_ENABLED,
+    statusHost: process.env.STATUS_HOST,
+    statusPort: process.env.STATUS_PORT,
   };
 }
 
@@ -102,4 +105,7 @@ export const Config: IConfig = {
   stripMarkdown: parseBoolean(configFile.stripMarkdown, true),
   allowGlobalUsageReport: parseBoolean(configFile.allowGlobalUsageReport, false),
   generatedFilesPath: configFile.generatedFilesPath || "./data/generated",
+  statusPageEnabled: parseBoolean(configFile.statusPageEnabled, false),
+  statusHost: configFile.statusHost || "127.0.0.1",
+  statusPort: Number(configFile.statusPort || 8791),
 };

@@ -192,8 +192,8 @@ https://wechaty.js.org/qrcode/...
 ```yaml
 openaiApiKey: ""
 openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-openaiModel: "qwen-plus"
-agentModel: "qwen-turbo"
+openaiModel: "qwen3.6-flash"
+agentModel: "qwen3.6-flash"
 legacyTriggerKeyword: "Hi bot:"
 
 privateAutoReply: true
@@ -211,8 +211,8 @@ reminderFollowupIntervalMinutes: 5
 debugMessageTypes: true
 
 multimodalEnabled: true
-visionModel: "qwen-vl-plus"
-audioModel: "qwen-audio-turbo-latest"
+visionModel: "qwen3.7-plus"
+audioModel: "qwen3-omni-flash"
 maxMediaBytes: 10485760
 maxVideoBytes: 83886080
 videoInlineMaxBytes: 6291456
@@ -225,6 +225,9 @@ stripMarkdown: true
 
 allowGlobalUsageReport: false
 generatedFilesPath: "./data/generated"
+statusPageEnabled: false
+statusHost: "127.0.0.1"
+statusPort: 8791
 ```
 
 字段说明：
@@ -233,8 +236,8 @@ generatedFilesPath: "./data/generated"
 | --- | --- |
 | `openaiApiKey` | 百炼 / DashScope API Key |
 | `openaiBasePath` | OpenAI 兼容模式地址 |
-| `openaiModel` | 普通聊天模型，默认 `qwen-plus` |
-| `agentModel` | 工具路由和复杂任务模型，默认 `qwen-turbo` |
+| `openaiModel` | 普通聊天模型，建议 `qwen3.6-flash` |
+| `agentModel` | 工具路由和复杂任务模型，建议 `qwen3.6-flash` |
 | `legacyTriggerKeyword` | 兼容旧触发词；私聊默认不需要 |
 | `privateAutoReply` | 私聊是否自动回复所有文本 |
 | `defaultGroupMode` | 群聊默认模式：`quiet` / `smart` / `active` / `super_active` / `talkative` |
@@ -261,6 +264,11 @@ generatedFilesPath: "./data/generated"
 | `stripMarkdown` | 发送微信前是否移除 Markdown 标记 |
 | `allowGlobalUsageReport` | 私聊中是否允许查看全局 token 用量 |
 | `generatedFilesPath` | agent 生成文件的保存目录 |
+| `statusPageEnabled` | 是否启用只读运行状态页 |
+| `statusHost` | 状态页监听地址，公网部署建议绑定 `127.0.0.1` 后由 Nginx 反代 |
+| `statusPort` | 状态页监听端口 |
+
+状态页只展示登录状态、运行时长、模型名、消息/API 计数和最近错误，不展示二维码、聊天原文、API Key 或 root 授权串。服务器部署时可以用 Nginx 反代到 `/wechat-status/`，JSON 接口为 `/wechat-status/status.json`。
 
 ## 运行和维护
 

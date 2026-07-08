@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyWechatBot 核心代码逻辑解读</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #687386;
+      --line: #d9dee8;
+      --blue: #2563eb;
+      --green: #047857;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --violet: #6d28d9;
+      --code-bg: #111827;
+      --code-ink: #f9fafb;
+      --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+
+    header {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 56px 24px 42px;
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    h1,
+    h2,
+    h3 {
+      line-height: 1.25;
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(32px, 6vw, 54px);
+      letter-spacing: 0;
+      margin-bottom: 14px;
+    }
+
+    header p {
+      max-width: 780px;
+      color: #cbd5e1;
+      font-size: 17px;
+      margin: 0;
+    }
+
+    nav {
+      background: #ffffff;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    nav .wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px 0;
+    }
+
+    nav a {
+      color: #334155;
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 14px;
+      background: #f8fafc;
+    }
+
+    main {
+      padding: 28px 0 64px;
+    }
+
+    section {
+      margin-top: 28px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    .panel + .panel {
+      margin-top: 18px;
+    }
+
+    .lead {
+      color: var(--muted);
+      margin: 10px 0 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: #fbfdff;
+    }
+
+    .card h3 {
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 6px;
+      color: #ffffff;
+      background: var(--blue);
+    }
+
+    .tag.green { background: var(--green); }
+    .tag.amber { background: var(--amber); }
+    .tag.red { background: var(--red); }
+    .tag.violet { background: var(--violet); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f1f5f9;
+      color: #334155;
+    }
+
+    code,
+    .code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.95em;
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-radius: 8px;
+      padding: 16px;
+      overflow: auto;
+      line-height: 1.55;
+      margin: 14px 0 0;
+    }
+
+    .flow {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 46px 1fr;
+      gap: 12px;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 14px;
+    }
+
+    .num {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #e0ecff;
+      color: var(--blue);
+      font-weight: 800;
+    }
+
+    .step h3 {
+      font-size: 16px;
+      margin-bottom: 3px;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .cols {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    .note {
+      border-left: 4px solid var(--blue);
+      background: #eff6ff;
+      padding: 12px 14px;
+      border-radius: 6px;
+      color: #1e3a8a;
+      margin-top: 14px;
+    }
+
+    .warn {
+      border-left-color: var(--amber);
+      background: #fffbeb;
+      color: #78350f;
+    }
+
+    .danger {
+      border-left-color: var(--red);
+      background: #fef2f2;
+      color: #7f1d1d;
+    }
+
+    footer {
+      color: var(--muted);
+      padding: 28px 0 42px;
+      border-top: 1px solid var(--line);
+      background: #ffffff;
+    }
+
+    @media (max-width: 860px) {
+      .grid,
+      .cols {
+        grid-template-columns: 1fr;
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      nav {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>MyWechatBot 核心代码逻辑解读</h1>
+      <p>这份文档按“消息如何进入、如何判断、如何调用模型和工具、如何记忆、如何回复”的路径解释当前代码。重点覆盖机器人逻辑，不展开依赖安装和部署细节。</p>
+    </div>
+  </header>
+
+  <nav>
+    <div class="wrap">
+      <a href="#overview">总览</a>
+      <a href="#files">文件职责</a>
+      <a href="#flow">消息主链路</a>
+      <a href="#routing">路由与 Agent</a>
+      <a href="#memory">记忆与存储</a>
+      <a href="#media">多模态</a>
+      <a href="#status">状态页</a>
+      <a href="#root">Root 权限</a>
+      <a href="#reply">回复处理</a>
+      <a href="#risks">设计边界</a>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <section id="overview" class="panel">
+      <h2>1. 总体架构</h2>
+      <p class="lead">当前项目可以理解为四层：微信接入层、机器人决策层、持久化状态层、模型/工具调用层。</p>
+      <div class="grid">
+        <div class="card">
+          <h3><span class="tag">入口</span>Wechaty</h3>
+          <p><code>src/main.ts</code> 负责扫码、登录、监听消息，并把消息交给 <code>WechatCompanion</code>。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag green">核心</span>Companion</h3>
+          <p><code>src/companion.ts</code> 是主脑，处理群聊模式、路由、提醒、文件、代码执行、多模态、回复。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag amber">状态</span>BotStore</h3>
+          <p><code>src/store.ts</code> 使用 JSON 文件保存聊天记录、记忆、提醒、token 用量、root、白名单。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag violet">模型</span>OpenAI 兼容 API</h3>
+          <p><code>Config.openaiBasePath</code> 指向 DashScope 兼容接口，聊天、agent、视觉、语音模型可分开配置。</p>
+        </div>
+      </div>
+      <pre><code>微信消息
+  -> src/main.ts
+  -> WechatCompanion.onCustimzedTask()
+  -> WechatCompanion.onMessage()
+  -> 路由判断 / 工具执行 / 普通聊天
+  -> BotStore 记录状态与用量
+  -> botStatus 更新运行状态
+  -> 分段清洗后发回微信</code></pre>
+    </section>
+
+    <section id="files" class="panel">
+      <h2>2. 核心文件职责</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>职责</th>
+            <th>你改功能时常看哪里</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>src/main.ts</code></td>
+            <td>创建 Wechaty 实例；打印二维码；登录后启动机器人；监听消息；过滤重启前历史消息。</td>
+            <td>扫码、登录、服务启动、消息入口。</td>
+          </tr>
+          <tr>
+            <td><code>src/config.ts</code></td>
+            <td>优先读取 <code>config.yaml</code>，没有则读取环境变量；设置默认模型、群聊模式、冷却、回复长度、多模态等。</td>
+            <td>新增配置项、修改默认值、排查配置是否生效。</td>
+          </tr>
+          <tr>
+            <td><code>src/interface.ts</code></td>
+            <td>定义配置接口 <code>IConfig</code>。</td>
+            <td>新增配置时同步类型。</td>
+          </tr>
+          <tr>
+            <td><code>src/status-server.ts</code></td>
+            <td>维护只读运行状态快照，提供 HTML 状态页和 <code>/status.json</code>。</td>
+            <td>查看模型是否生效、微信是否登录、最近 API/错误摘要。</td>
+          </tr>
+          <tr>
+            <td><code>src/store.ts</code></td>
+            <td>封装 JSON 存储，负责消息、长期记忆、提醒、token 记录、root、白名单、群设置。</td>
+            <td>记忆隔离、历史记录、提醒状态、统计逻辑。</td>
+          </tr>
+          <tr>
+            <td><code>src/companion.ts</code></td>
+            <td>最大核心文件，包含消息处理、工具路由、Agent 任务、多模态、root 管理、回复清洗和分段。</td>
+            <td>绝大多数机器人行为都在这里。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="flow" class="panel">
+      <h2>3. 消息主链路</h2>
+      <p class="lead">一条消息从微信进来后，不会马上扔给大模型，而是经过一串前置判断。</p>
+      <div class="flow">
+        <div class="step">
+          <div class="num">1</div>
+          <div>
+            <h3><code>main.ts</code> 收到消息</h3>
+            <p>启动时先开启可选状态页；收到消息后检查消息时间，避免服务重启后回复历史消息。然后调用 <code>onCustimzedTask()</code>，如果没有被处理，再进入 <code>onMessage()</code>。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>自定义命令优先处理</h3>
+            <p><code>onCustimzedTask()</code> 先处理公众号忽略、root 授权、root 命令、群聊模式切换、帮助菜单等。这些不需要大模型。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div>
+            <h3>创建会话上下文</h3>
+            <p><code>createContext()</code> 判断消息来自私聊还是群聊，记录 <code>chatId</code>、<code>chatName</code>、<code>talkerId</code>、<code>talkerName</code>。这是隔离记忆和权限的基础。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div>
+            <h3>过滤与权限判断</h3>
+            <p><code>isIgnorable()</code> 忽略公众号、系统消息、红包、撤回、部分无法处理类型；<code>isChatAllowed()</code> 根据 root 设置的白名单/黑名单决定是否响应。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">5</div>
+          <div>
+            <h3>非文本消息进入多模态链路</h3>
+            <p>图片、语音、视频、表情包由 <code>handleNonTextMessage()</code> 处理。它会先缓存最近媒体，再决定是否主动调用视觉/语音模型。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">6</div>
+          <div>
+            <h3>文本消息进入响应判断</h3>
+            <p><code>shouldRespond()</code> 根据私聊自动回复、群聊模式、@、触发词、是否需要工具、冷却时间决定要不要说话。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">7</div>
+          <div>
+            <h3>路由到聊天或工具</h3>
+            <p><code>handleUserText()</code> 先做确定性识别，再交给 LLM 路由兜底，最后由 <code>handleIntent()</code> 执行具体动作。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="routing" class="panel">
+      <h2>4. 路由与 Agent 逻辑</h2>
+      <p class="lead">当前采用“双层路由”：先用规则抓明显需求，再让便宜的 agent 模型判断模糊自然语言，避免纯关键词误伤。</p>
+      <div class="cols">
+        <div class="card">
+          <h3>确定性路由</h3>
+          <ul>
+            <li><code>parseDeterministicToolIntent()</code> 识别 token 用量、提醒、提醒列表、文件生成、代码运行、日程表等。</li>
+            <li>优点是快、便宜、稳定，很多需求无需多一次 LLM 调用。</li>
+            <li>风险是自然语言里嵌入关键词可能误判，所以后面有 guard。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>LLM 路由</h3>
+          <ul>
+            <li><code>routeIntentIfNeeded()</code> 使用 <code>Config.agentModel</code> 输出 JSON 意图。</li>
+            <li>支持 <code>remember</code>、<code>recall</code>、<code>reminder</code>、<code>agent_task</code>、<code>usage_report</code>、<code>set_group_mode</code> 等。</li>
+            <li>提示词明确要求：不要把书名或普通话题里的 token 误判成用量查询。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="note">
+        <strong>关键设计：</strong><code>guardDeterministicIntent()</code> 会把高风险或容易误伤的确定性意图再交给 LLM 审一遍。例如“请搜索《token 的一生》”不应该触发 token 用量查询。
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>意图</th>
+            <th>执行函数</th>
+            <th>效果</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>chat</code></td>
+            <td><code>onCompanionChat()</code></td>
+            <td>普通聊天，带最近消息和相关记忆。</td>
+          </tr>
+          <tr>
+            <td><code>remember</code></td>
+            <td><code>handleRemember()</code></td>
+            <td>保存长期记忆到当前会话。</td>
+          </tr>
+          <tr>
+            <td><code>recall</code></td>
+            <td><code>handleRecall()</code></td>
+            <td>检索当前会话记忆并自然回答。</td>
+          </tr>
+          <tr>
+            <td><code>reminder</code></td>
+            <td><code>handleReminder()</code></td>
+            <td>创建一次性、每日、连续多次提醒。</td>
+          </tr>
+          <tr>
+            <td><code>agent_task</code></td>
+            <td><code>handleAgentTask()</code></td>
+            <td>生成文件、日程表、计划，或在确认后执行代码。</td>
+          </tr>
+          <tr>
+            <td><code>usage_report</code></td>
+            <td><code>handleUsageReport()</code></td>
+            <td>查询当前会话 token 用量，root 可看全局导出。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="memory" class="panel">
+      <h2>5. 记忆、历史与数据隔离</h2>
+      <p class="lead"><code>BotStore</code> 的核心原则是：聊天记录可以一直保存，但每次喂给模型的上下文只取最近一小段，再加检索到的相关长期记忆。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>数据</th>
+            <th>存储字段</th>
+            <th>隔离方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>原始聊天记录</td>
+            <td><code>messages</code></td>
+            <td>每条都有 <code>chatId</code> 和 <code>talkerId</code>，查询最近上下文时按 <code>chatId</code> 过滤。</td>
+          </tr>
+          <tr>
+            <td>长期记忆</td>
+            <td><code>memories</code></td>
+            <td><code>searchMemories()</code> 当前只搜索本会话 <code>chatId</code> 的记忆，因此不同用户/群隔离。</td>
+          </tr>
+          <tr>
+            <td>提醒</td>
+            <td><code>reminders</code></td>
+            <td>提醒绑定创建时的会话，群聊提醒发到对应群，私聊提醒发给对应联系人。</td>
+          </tr>
+          <tr>
+            <td>用量记录</td>
+            <td><code>usageRecords</code></td>
+            <td>按 <code>date</code>、<code>chatId</code>、<code>scope</code> 汇总，root 或配置允许时可看全局。</td>
+          </tr>
+          <tr>
+            <td>root 与白名单</td>
+            <td><code>rootUsers</code>、<code>chatAccess</code></td>
+            <td>root 绑定 <code>talkerId</code>；白名单/黑名单绑定会话 <code>chatId</code>。</td>
+          </tr>
+        </tbody>
+      </table>
+      <pre><code>普通聊天上下文 = [
+  system 人格与规则,
+  当前会话信息,
+  当前会话相关长期记忆,
+  最近 N 条同 chatId 消息,
+  用户本次消息
+]</code></pre>
+      <div class="note warn">
+        <strong>注意：</strong>当前“记忆检索”是简单关键词打分，不是向量库。好处是轻量和可控；缺点是语义召回能力有限，后续可以升级成 embedding + SQLite/向量索引。
+      </div>
+    </section>
+
+    <section id="media" class="panel">
+      <h2>6. 多模态逻辑</h2>
+      <p class="lead">多模态不是每条消息都调用模型，而是先缓存、再判断是否处理，以控制 token 和避免刷屏。</p>
+      <div class="cols">
+        <div class="card">
+          <h3>图片</h3>
+          <p>通过 <code>describeImageMessage()</code> 调用视觉模型，提示词要求识别图片内容、文字、截图细节。</p>
+        </div>
+        <div class="card">
+          <h3>表情包</h3>
+          <p><code>describeEmoticonMessage()</code> 把表情包转成一句语义短语，并用 <code>emoticonMeaningCache</code> 缓存。</p>
+        </div>
+        <div class="card">
+          <h3>语音</h3>
+          <p><code>transcribeAudioMessage()</code> 下载微信语音并转成 wav，再用 <code>qwen3-omni-flash</code> 的流式接口转写。</p>
+        </div>
+        <div class="card">
+          <h3>视频</h3>
+          <p><code>describeVideoMessage()</code> 用 ffmpeg 抽帧，再交给视觉模型总结视频内容。</p>
+        </div>
+      </div>
+      <div class="note">
+        <strong>最近媒体引用：</strong>图片/语音/表情/视频会进入 <code>pendingMediaByChat</code>，10 分钟内用户说“看一下这张图”“这个表情什么意思”时，会关联最近媒体。
+      </div>
+      <div class="note warn">
+        <strong>主动处理策略：</strong>私聊默认可主动处理图片/语音/表情；群聊在安静和智能模式下不主动看媒体，超活跃/话唠模式才更积极，且有冷却。
+      </div>
+      <div class="note">
+        <strong>语音转写细节：</strong>普通聊天仍走 <code>completeChat()</code>，但语音转写走 <code>completeOmniAudioTranscription()</code>。原因是 Qwen-Omni 要求音频 base64 使用 <code>data:;base64,...</code> 包装，并且请求必须 <code>stream: true</code>；否则会出现“URL 不合法”类 400 错误。
+      </div>
+    </section>
+
+    <section id="status" class="panel">
+      <h2>7. 运行状态页</h2>
+      <p class="lead">状态页用于快速确认机器人是否在线、模型配置是否生效、最近 API 调用和错误摘要是什么。它不展示聊天原文、二维码、API Key 或 root 授权串。</p>
+      <div class="cols">
+        <div class="card">
+          <h3>启动方式</h3>
+          <ul>
+            <li><code>Config.statusPageEnabled</code> 控制是否启用。</li>
+            <li><code>statusHost</code> 默认绑定 <code>127.0.0.1</code>，避免直接暴露端口。</li>
+            <li>服务器通过 Nginx 将 <code>/wechat-status/</code> 反代到状态服务。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>记录内容</h3>
+          <ul>
+            <li>微信状态：启动中、等待扫码、已登录、已退出、异常。</li>
+            <li>模型快照：聊天、agent、视觉、语音四个模型名。</li>
+            <li>计数摘要：收发消息数、API 调用数、token 总量、最近错误首行。</li>
+          </ul>
+        </div>
+      </div>
+      <pre><code>公开入口：
+http://dawnfy.top/wechat-status/
+http://dawnfy.top/wechat-status/status.json</code></pre>
+    </section>
+
+    <section id="root" class="panel">
+      <h2>8. Root、白名单与群聊模式</h2>
+      <p class="lead">Root 是最高权限用户，用来管理机器人可以在哪些会话里说话，以及查看会话列表和摘要。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>能力</th>
+            <th>入口</th>
+            <th>代码逻辑</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>获取 root</td>
+            <td>发送配置里的 <code>rootAuthToken</code> 或 <code>/root token</code></td>
+            <td><code>isRootAuthText()</code> 校验，成功后 <code>store.addRootUser()</code>。</td>
+          </tr>
+          <tr>
+            <td>查看好友/群/会话</td>
+            <td><code>/好友列表</code>、<code>/群列表</code>、<code>/会话列表</code></td>
+            <td>优先从 Wechaty 实时读取，失败时从 <code>knownChats</code> 兜底。</td>
+          </tr>
+          <tr>
+            <td>禁用或允许会话</td>
+            <td><code>/禁止 编号</code>、<code>/允许 编号</code></td>
+            <td><code>setChatAccess()</code> 写入 <code>chatAccess</code>，后续 <code>isChatAllowed()</code> 判断。</td>
+          </tr>
+          <tr>
+            <td>总结其他会话</td>
+            <td><code>/总结 编号</code></td>
+            <td>读取目标会话最近 160 条消息，用 agent 模型生成摘要。</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3 style="margin-top: 18px;">群聊模式</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>模式</th>
+            <th>行为</th>
+            <th>适合场景</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>quiet</code></td>
+            <td>只在被 @ 或触发词出现时回复。</td>
+            <td>大群、工作群、怕打扰的群。</td>
+          </tr>
+          <tr>
+            <td><code>smart</code></td>
+            <td>明显问到机器人或需要工具时回复。</td>
+            <td>默认模式，比较稳。</td>
+          </tr>
+          <tr>
+            <td><code>active</code></td>
+            <td>更主动参与，有冷却。</td>
+            <td>熟人小群。</td>
+          </tr>
+          <tr>
+            <td><code>super_active</code></td>
+            <td>更积极接话，媒体处理也更主动。</td>
+            <td>测试群、娱乐群。</td>
+          </tr>
+          <tr>
+            <td><code>talkative</code></td>
+            <td>高频聊天，语音等也更可能处理。</td>
+            <td>想把它当群友玩的时候。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="reply" class="panel">
+      <h2>9. 模型调用、Token 记录与回复前处理</h2>
+      <p class="lead">大多数聊天、路由、视觉理解、摘要等模型调用经过 <code>completeChat()</code>；语音转写因为 Qwen-Omni 的接口要求，单独走流式请求。</p>
+      <ul>
+        <li><code>completeChat()</code> 调 OpenAI 兼容接口，默认使用 <code>Config.openaiModel</code>，路由和部分 agent 使用 <code>Config.agentModel</code>。</li>
+        <li><code>completeOmniAudioTranscription()</code> 使用 <code>Config.audioModel</code>，以流式方式读取转写文本和 usage。</li>
+        <li>如果 API 返回 usage，就记录真实 token；如果没有返回，就用字符长度粗估。</li>
+        <li><code>store.addUsage()</code> 会保存 feature、model、chatId、scope、promptTokens、completionTokens、totalTokens。</li>
+        <li><code>botStatus.recordUsage()</code> 同步更新状态页里的 API 调用数、最近模型和 token 总数。</li>
+        <li><code>prepareReplyForWechat()</code> 会去掉 Markdown 粗体、代码围栏、链接格式等，避免微信里出现一堆星号。</li>
+        <li><code>splitWechatMessage()</code> 按最大长度切分消息，优先在换行和标点处断开，超过最大段数会截断并提示。</li>
+      </ul>
+      <div class="note">
+        <strong>文件发送：</strong>生成日程表、报告、token 用量文件时，先写入 <code>Config.generatedFilesPath</code>，再通过 <code>pendingFilesByChat</code> 在回复后发送文件。
+      </div>
+    </section>
+
+    <section id="risks" class="panel">
+      <h2>10. 当前设计优点与边界</h2>
+      <div class="cols">
+        <div class="card">
+          <h3>已经做得不错的地方</h3>
+          <ul>
+            <li>私聊、群聊、root、白名单、群模式已经有明确边界。</li>
+            <li>提醒、每日提醒、连续提醒、多模态、文件生成都有基础实现。</li>
+            <li>token 统计是系统真实记录，不再依赖模型编造。</li>
+            <li>公网状态页能快速确认模型配置和运行状态，排查时不用一直翻日志。</li>
+            <li>代码执行有确认机制，避免看到“代码”两个字就执行。</li>
+            <li>媒体处理有缓存和冷却，避免表情刷屏烧 token。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>后续最值得优化的地方</h3>
+          <ul>
+            <li>把 <code>companion.ts</code> 拆成路由、工具、媒体、回复、权限等模块，降低维护难度。</li>
+            <li>把 JSON 存储升级为 SQLite，方便查询、索引、备份和迁移。</li>
+            <li>长期记忆增加 embedding 检索和定期摘要，解决历史越来越多的问题。</li>
+            <li>路由结果增加审计日志，让 root 可以查看“为什么这条消息触发了工具”。</li>
+            <li>Agent 工具协议可以标准化成 tool schema，方便以后接搜索、日历、邮件、文件系统。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="note danger">
+        <strong>最需要小心的点：</strong>代码执行和主动群聊是两个高风险能力。前者要坚持确认和沙箱，后者要坚持白名单、冷却和 root 可控，否则很容易误触发或打扰群友。
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>更新时间：2026-07-09。对应代码主线：<code>src/main.ts</code>、<code>src/companion.ts</code>、<code>src/status-server.ts</code>、<code>src/store.ts</code>、<code>src/config.ts</code>。</p>
+    </div>
+  </footer>
+</body>
+</html>

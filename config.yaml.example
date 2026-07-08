@@ -1,7 +1,7 @@
 openaiApiKey: ""
 openaiBasePath: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-openaiModel: "qwen-plus"
-agentModel: "qwen-turbo"
+openaiModel: "qwen3.6-flash"
+agentModel: "qwen3.6-flash"
 legacyTriggerKeyword: "Hi bot:"
 privateAutoReply: true
 defaultGroupMode: "smart"
@@ -16,8 +16,8 @@ talkativeGroupCooldownSeconds: 5
 reminderFollowupIntervalMinutes: 5
 debugMessageTypes: true
 multimodalEnabled: true
-visionModel: "qwen-vl-plus"
-audioModel: "qwen-audio-turbo-latest"
+visionModel: "qwen3.7-plus"
+audioModel: "qwen3-omni-flash"
 maxMediaBytes: 10485760
 maxVideoBytes: 83886080
 videoInlineMaxBytes: 6291456
@@ -28,3 +28,6 @@ replyMaxSegments: 8
 stripMarkdown: true
 allowGlobalUsageReport: false
 generatedFilesPath: "./data/generated"
+statusPageEnabled: false
+statusHost: "127.0.0.1"
+statusPort: 8791

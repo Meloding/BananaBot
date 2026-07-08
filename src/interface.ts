@@ -29,4 +29,7 @@ export interface IConfig {
   stripMarkdown: boolean;
   allowGlobalUsageReport: boolean;
   generatedFilesPath: string;
+  statusPageEnabled: boolean;
+  statusHost: string;
+  statusPort: number;
 }

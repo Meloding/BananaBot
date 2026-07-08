@@ -1,4 +1,5 @@
 import { Config } from "./config.js";
+import { botStatus } from "./status-server.js";
 import fs from "fs";
 import http from "http";
 import https from "https";
@@ -1842,6 +1843,7 @@ export class WechatCompanion {
       totalTokens,
       estimated: !usage,
     });
+    botStatus.recordUsage(model, feature, totalTokens);
     return {
       text,
       promptTokens,
@@ -2528,13 +2530,7 @@ export class WechatCompanion {
     const media = await this.readMessageMedia(message, MessageType.Audio);
     const audio = await this.normalizeAudioForTranscription(media);
     try {
-      const result = await this.completeChat(
-        this.createAudioInputMessages(audio),
-        context,
-        "audio_transcription",
-        0.1,
-        Config.audioModel
-      );
+      const result = await this.completeOmniAudioTranscription(audio, context);
       return `[语音转文字]\n${result.text}`;
     } catch (error) {
       console.warn(
@@ -2557,23 +2553,126 @@ export class WechatCompanion {
   private createAudioInputMessages(audio: MediaFile): Array<any> {
     return [
       {
-        role: "system",
-        content:
-          "你是微信语音转写模块。请只输出语音转写文本，不要解释，不要加前后缀。",
-      },
-      {
         role: "user",
         content: [
           {
             type: "input_audio",
             input_audio: {
-              data: audio.base64,
+              data: `data:;base64,${audio.base64}`,
               format: audio.extension.replace(/^\./, "") || "wav",
             },
+          },
+          {
+            type: "text",
+            text: "请转写这段微信语音。只输出转写文字，不要解释，不要加前后缀。",
           },
         ],
       },
     ];
+  }
+
+  private async completeOmniAudioTranscription(
+    audio: MediaFile,
+    context: ChatContext
+  ): Promise<CompletionResult> {
+    const messages = this.createAudioInputMessages(audio);
+    const response = await this.openaiApiInstance.createChatCompletion(
+      {
+        model: Config.audioModel,
+        messages,
+        modalities: ["text"],
+        stream: true,
+        stream_options: { include_usage: true },
+        enable_thinking: false,
+        temperature: 0.1,
+      } as any,
+      { responseType: "stream" } as any
+    );
+    const { text, usage } = await this.readChatCompletionStream(response.data);
+    const estimatedPrompt = this.estimateTokens("微信语音转写");
+    const estimatedCompletion = this.estimateTokens(text);
+    const promptTokens = usage?.prompt_tokens || estimatedPrompt;
+    const completionTokens = usage?.completion_tokens || estimatedCompletion;
+    const totalTokens =
+      usage?.total_tokens || promptTokens + completionTokens || estimatedPrompt;
+    this.store.addUsage({
+      scope: context.scope,
+      chatId: context.chatId,
+      chatName: context.chatName,
+      model: Config.audioModel,
+      feature: "audio_transcription",
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      estimated: !usage,
+    });
+    botStatus.recordUsage(Config.audioModel, "audio_transcription", totalTokens);
+    return {
+      text: text.trim(),
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      estimated: !usage,
+    };
+  }
+
+  private async readChatCompletionStream(
+    stream: AsyncIterable<Buffer | string>
+  ): Promise<{ text: string; usage?: any }> {
+    let buffer = "";
+    let text = "";
+    let usage: any;
+
+    const consumeLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) {
+        return;
+      }
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") {
+        return;
+      }
+      try {
+        const event = JSON.parse(payload);
+        if (event.usage) {
+          usage = event.usage;
+        }
+        text += this.extractStreamingDeltaText(event.choices?.[0]?.delta);
+      } catch {
+        // Ignore partial or non-JSON stream lines.
+      }
+    };
+
+    for await (const chunk of stream) {
+      buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        consumeLine(line);
+      }
+    }
+    if (buffer) {
+      consumeLine(buffer);
+    }
+    return { text, usage };
+  }
+
+  private extractStreamingDeltaText(delta: any): string {
+    const content = delta?.content;
+    if (typeof content === "string") {
+      return content;
+    }
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (typeof part === "string") {
+            return part;
+          }
+          return part?.text || part?.content || "";
+        })
+        .join("");
+    }
+    return "";
   }
 
   private async normalizeAudioForTranscription(media: MediaFile): Promise<MediaFile> {
@@ -3411,6 +3510,7 @@ export class WechatCompanion {
         continue;
       }
       await target.say(FileBox.fromFile(filePath));
+      botStatus.recordOutgoingMessage();
     }
   }
 
@@ -3425,6 +3525,7 @@ export class WechatCompanion {
     );
     for (const msg of messages) {
       await talker.say(msg);
+      botStatus.recordOutgoingMessage();
     }
   }
 
@@ -3523,6 +3624,7 @@ export class WechatCompanion {
           : weChatBot.Contact.load(reminder.chatId);
       const message = await this.createReminderMessage(reminder);
       await target.say(message);
+      botStatus.recordOutgoingMessage();
       this.store.markReminderSent(reminder.id);
     } catch (error) {
       const errorText = this.formatApiError(error);
