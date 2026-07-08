@@ -4,6 +4,7 @@ import path from "path";
 export type ChatScope = "private" | "group";
 export type GroupMode = "quiet" | "smart" | "active" | "super_active" | "talkative";
 export type ReminderRepeat = "none" | "daily";
+export type ReminderStatus = "pending" | "sent" | "cancelled" | "failed";
 export type ChatAccessStatus = "allow" | "deny";
 
 export interface ChatContext {
@@ -56,11 +57,22 @@ export interface ReminderItem {
   content: string;
   repeat?: ReminderRepeat;
   lastSentAt?: string;
-  status: "pending" | "sent" | "cancelled";
+  lastFailedAt?: string;
+  lastError?: string;
+  failureCount?: number;
+  status: ReminderStatus;
 }
 
 export interface ChatAccessRule {
   scope: ChatScope;
+  chatId: string;
+  chatName: string;
+  status: ChatAccessStatus;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface PrivateVideoAccessRule {
   chatId: string;
   chatName: string;
   status: ChatAccessStatus;
@@ -98,6 +110,7 @@ interface BotData {
   groupSettings: Record<string, GroupSetting>;
   rootUsers: Record<string, string>;
   chatAccess: Record<string, ChatAccessRule>;
+  privateVideoAccess: Record<string, PrivateVideoAccessRule>;
   knownChats: Record<string, KnownChat>;
 }
 
@@ -109,6 +122,7 @@ const emptyData = (): BotData => ({
   groupSettings: {},
   rootUsers: {},
   chatAccess: {},
+  privateVideoAccess: {},
   knownChats: {},
 });
 
@@ -252,6 +266,9 @@ export class BotStore {
     const reminder = this.data.reminders.find((item) => item.id === id);
     if (reminder) {
       reminder.lastSentAt = new Date().toISOString();
+      reminder.lastFailedAt = undefined;
+      reminder.lastError = undefined;
+      reminder.failureCount = 0;
       if (reminder.repeat === "daily") {
         const next = new Date(reminder.remindAt);
         const now = new Date();
@@ -265,6 +282,25 @@ export class BotStore {
       }
       this.save();
     }
+  }
+
+  markReminderFailed(
+    id: string,
+    error: string,
+    maxFailures = 3
+  ): ReminderItem | undefined {
+    const reminder = this.data.reminders.find((item) => item.id === id);
+    if (!reminder) {
+      return undefined;
+    }
+    reminder.failureCount = (reminder.failureCount || 0) + 1;
+    reminder.lastFailedAt = new Date().toISOString();
+    reminder.lastError = error.slice(0, 500);
+    if (reminder.failureCount >= maxFailures) {
+      reminder.status = "failed";
+    }
+    this.save();
+    return reminder;
   }
 
   addUsage(record: Omit<UsageRecord, "id" | "timestamp" | "date">) {
@@ -346,6 +382,30 @@ export class BotStore {
 
   getChatAccessRules(status?: ChatAccessStatus): ChatAccessRule[] {
     return Object.values(this.data.chatAccess)
+      .filter((rule) => !status || rule.status === status)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  setPrivateVideoAccess(
+    context: Pick<PrivateVideoAccessRule, "chatId" | "chatName">,
+    status: ChatAccessStatus,
+    updatedBy: string
+  ) {
+    this.data.privateVideoAccess[context.chatId] = {
+      ...context,
+      status,
+      updatedAt: new Date().toISOString(),
+      updatedBy,
+    };
+    this.save();
+  }
+
+  getPrivateVideoAccess(chatId: string): PrivateVideoAccessRule | undefined {
+    return this.data.privateVideoAccess[chatId];
+  }
+
+  getPrivateVideoAccessRules(status?: ChatAccessStatus): PrivateVideoAccessRule[] {
+    return Object.values(this.data.privateVideoAccess)
       .filter((rule) => !status || rule.status === status)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }

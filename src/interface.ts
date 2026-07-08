@@ -20,6 +20,9 @@ export interface IConfig {
   visionModel: string;
   audioModel: string;
   maxMediaBytes: number;
+  maxVideoBytes: number;
+  videoInlineMaxBytes: number;
+  videoInputFps: number;
   videoFrameCount: number;
   replyMaxLength: number;
   replyMaxSegments: number;

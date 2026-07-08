@@ -214,6 +214,9 @@ multimodalEnabled: true
 visionModel: "qwen-vl-plus"
 audioModel: "qwen-audio-turbo-latest"
 maxMediaBytes: 10485760
+maxVideoBytes: 83886080
+videoInlineMaxBytes: 6291456
+videoInputFps: 2
 videoFrameCount: 3
 
 replyMaxLength: 500
@@ -246,10 +249,13 @@ generatedFilesPath: "./data/generated"
 | `reminderFollowupIntervalMinutes` | 连续提醒多次时的间隔分钟数 |
 | `debugMessageTypes` | 是否在日志输出微信消息类型 |
 | `multimodalEnabled` | 是否启用多模态 |
-| `visionModel` | 图片/视频帧理解模型 |
+| `visionModel` | 图片、表情包、视频理解模型 |
 | `audioModel` | 语音转写模型 |
-| `maxMediaBytes` | 单个媒体文件最大字节数 |
-| `videoFrameCount` | 视频最多抽帧数量 |
+| `maxMediaBytes` | 图片、语音、表情等普通媒体最大字节数 |
+| `maxVideoBytes` | 微信视频下载到服务器的最大字节数，默认 80MB |
+| `videoInlineMaxBytes` | 送入 Qwen-VL 前的视频目标大小，默认 6MB |
+| `videoInputFps` | Qwen-VL 读取视频时的采样 fps |
+| `videoFrameCount` | 原生视频理解失败时，抽帧兜底的最多帧数 |
 | `replyMaxLength` | 单条微信消息最大长度 |
 | `replyMaxSegments` | 一次回复最多拆分几条 |
 | `stripMarkdown` | 发送微信前是否移除 Markdown 标记 |
@@ -397,7 +403,9 @@ systemctl restart my-wechat-bot.service
 
 - 安静模式：群里随机发图不会处理；只有 @ 或触发词问它时才会理解最近媒体。
 - 智能模式：群里随机发图不会处理；明显问到机器人时才会理解最近媒体。
-- 活跃、超级活跃、话唠模式：文本聊天会更积极参与，但随机裸发图片、语音、视频仍不会主动调用多模态模型。
+- 活跃模式：文本聊天会更积极参与，但随机裸发图片、语音、视频仍不会主动调用多模态模型。
+- 超级活跃模式：会主动理解图片和表情包。
+- 话唠模式：会主动理解图片、语音、表情包和视频。
 
 也就是说，单纯乱发图片不会消耗 `visionModel`。机器人只会在当前群缓存最近几条媒体一小段时间，等有人明确问“这张图/刚才的视频/这条语音”时再调用模型。
 
@@ -445,12 +453,14 @@ systemctl restart my-wechat-bot.service
 
 ### 视频
 
-视频处理是尽力而为：
+视频处理优先使用 Qwen-VL 原生视频理解：
 
 1. 保存视频到临时目录。
-2. 如果服务器有 `ffmpeg`，按 `videoFrameCount` 抽帧。
-3. 将抽出的图片帧交给 `visionModel` 总结。
-4. 如果没有 `ffmpeg`，会提示当前不能抽帧。
+2. 如果视频超过 `videoInlineMaxBytes` 或不是 MP4，会用 `ffmpeg` 压缩/转码成小 MP4。
+3. 将 `data:video/mp4;base64,...` 通过 `video_url` 交给 `visionModel`。
+4. 如果原生视频理解失败，再按 `videoFrameCount` 抽帧兜底。
+
+私聊中，root 用户默认允许自动理解视频；普通好友需要 root 用 `/视频允许 编号` 授权。群聊中，话唠模式会主动理解视频，其他模式需要 @ 机器人或后续明确追问。
 
 安装 `ffmpeg`：
 
@@ -560,6 +570,9 @@ root 支持：
 /白名单
 /允许 3
 /禁止 3
+/视频允许 3
+/视频禁止 3
+/视频白名单
 /总结 3
 ```
 
@@ -584,9 +597,12 @@ root 支持：
 - `groupSettings`：群聊模式
 - `rootUsers`：root 用户
 - `chatAccess`：白名单/黑名单规则
+- `privateVideoAccess`：普通好友私聊视频自动回复权限
 - `knownChats`：已见过的私聊和群聊索引
 
 `data/` 已加入 `.gitignore`，不会提交到仓库。
+
+媒体文件默认不长期保存：图片、语音、视频只在处理时存在于内存或临时目录，处理结束后会删除。表情包调试文件、失败样本等只会在调试逻辑触发时写入 `data/debug-media/`；agent 生成的文件写入 `data/generated/`。
 
 消息记录按会话持续保留，不会因为超过 `historyMessageLimit` 自动删除。`historyMessageLimit` 只控制每次对话带入模型的最近消息条数，用来避免聊天记录越积越多后每次请求都变贵。
 
