@@ -2529,7 +2529,7 @@ export class WechatCompanion {
     const audio = await this.normalizeAudioForTranscription(media);
     try {
       const result = await this.completeChat(
-        this.createAudioInputMessages(audio, "input_audio"),
+        this.createAudioInputMessages(audio),
         context,
         "audio_transcription",
         0.1,
@@ -2537,48 +2537,24 @@ export class WechatCompanion {
       );
       return `[语音转文字]\n${result.text}`;
     } catch (error) {
-      console.warn(`audio transcription input_audio failed: ${this.formatApiError(error)}`);
-      try {
-        const result = await this.completeChat(
-          this.createAudioInputMessages(audio, "audio_url"),
-          context,
-          "audio_transcription",
-          0.1,
-          Config.audioModel
-        );
-        return `[语音转文字]\n${result.text}`;
-      } catch (fallbackError) {
       console.warn(
-        `audio transcription failed: ${this.formatApiError(fallbackError)} media=${media.name} ${media.mediaType} ${media.buffer.length} bytes normalized=${audio.name} ${audio.mediaType} ${audio.buffer.length} bytes`
+        `audio transcription failed: ${this.formatApiError(error)} media=${media.name} ${media.mediaType} ${media.buffer.length} bytes normalized=${audio.name} ${audio.mediaType} ${audio.buffer.length} bytes`
       );
+      if (this.isInsufficientQuotaError(error)) {
+        return [
+          "[Audio]",
+          `我已收到语音文件 ${media.name}，并已转成 wav，但当前音频模型额度不足或未开通计费，暂时不能转写。`,
+        ].join("\n");
+      }
       return [
         "[Audio]",
         `我已收到语音文件 ${media.name}，但当前音频模型没有成功识别。`,
         "微信 Web 协议不能稳定调用微信内置“转文字”。这次我已经尝试转成 wav 后识别，但模型仍未成功。",
       ].join("\n");
-      }
     }
   }
 
-  private createAudioInputMessages(
-    audio: MediaFile,
-    mode: "input_audio" | "audio_url"
-  ): Array<any> {
-    const audioPayload =
-      mode === "input_audio"
-        ? {
-            type: "input_audio",
-            input_audio: {
-              data: audio.base64,
-              format: audio.extension.replace(/^\./, "") || "wav",
-            },
-          }
-        : {
-            type: "audio_url",
-            audio_url: {
-              url: audio.dataUrl,
-            },
-          };
+  private createAudioInputMessages(audio: MediaFile): Array<any> {
     return [
       {
         role: "system",
@@ -2587,7 +2563,15 @@ export class WechatCompanion {
       },
       {
         role: "user",
-        content: [audioPayload],
+        content: [
+          {
+            type: "input_audio",
+            input_audio: {
+              data: audio.base64,
+              format: audio.extension.replace(/^\./, "") || "wav",
+            },
+          },
+        ],
       },
     ];
   }
@@ -3945,5 +3929,14 @@ export class WechatCompanion {
     ]
       .filter(Boolean)
       .join(" ");
+  }
+
+  private isInsufficientQuotaError(error: any): boolean {
+    const code = error?.response?.data?.error?.code;
+    const message = error?.response?.data?.error?.message || error?.message || "";
+    return (
+      code === "insufficient_quota" ||
+      /insufficient[_ ]quota|quota exceeded|allocated quota exceeded/i.test(message)
+    );
   }
 }
