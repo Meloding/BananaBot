@@ -134,6 +134,7 @@ export class BotStore {
   }
 
   addMessage(message: Omit<StoredMessage, "id" | "timestamp"> & { timestamp?: string }) {
+    this.reload();
     const timestamp = message.timestamp || new Date().toISOString();
     this.data.messages.push({
       id: this.createId("msg"),
@@ -153,27 +154,32 @@ export class BotStore {
     if (scope === "system") {
       return;
     }
+    const normalizedName = this.normalizeChatName(chatName, chatId);
+    this.mergeRenamedSessionChat(scope, chatId, normalizedName, lastSeenAt);
     this.data.knownChats[chatId] = {
       scope,
       chatId,
-      chatName,
+      chatName: normalizedName,
       lastSeenAt,
     };
   }
 
   getKnownChats(scope?: ChatScope): KnownChat[] {
-    return Object.values(this.data.knownChats)
+    this.reload();
+    return this.dedupeKnownChats(Object.values(this.data.knownChats))
       .filter((chat) => !scope || chat.scope === scope)
       .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
   }
 
   getRecentMessages(chatId: string, limit: number): StoredMessage[] {
+    this.reload();
     return this.data.messages
       .filter((message) => message.chatId === chatId)
       .slice(-limit);
   }
 
   getMessagesForDate(chatId: string, date: string): StoredMessage[] {
+    this.reload();
     return this.data.messages.filter(
       (message) =>
         message.chatId === chatId && message.timestamp.slice(0, 10) === date
@@ -186,6 +192,7 @@ export class BotStore {
     tags: string[] = [],
     scope: ChatScope | "global" = context.scope === "system" ? "global" : context.scope
   ): MemoryItem {
+    this.reload();
     const memory: MemoryItem = {
       id: this.createId("mem"),
       timestamp: new Date().toISOString(),
@@ -202,6 +209,7 @@ export class BotStore {
   }
 
   searchMemories(context: ChatContext, query: string, limit: number): MemoryItem[] {
+    this.reload();
     const normalizedQuery = query.trim().toLowerCase();
     const queryParts = normalizedQuery
       .split(/[\s,，。:：;；、]+/)
@@ -226,6 +234,7 @@ export class BotStore {
     content: string,
     repeat: ReminderRepeat = "none"
   ): ReminderItem {
+    this.reload();
     const reminder: ReminderItem = {
       id: this.createId("rem"),
       createdAt: new Date().toISOString(),
@@ -244,6 +253,7 @@ export class BotStore {
   }
 
   getReminders(chatId: string, limit = 20): ReminderItem[] {
+    this.reload();
     return this.data.reminders
       .filter((reminder) => reminder.chatId === chatId)
       .sort(
@@ -254,6 +264,7 @@ export class BotStore {
   }
 
   getDueReminders(now = new Date()): ReminderItem[] {
+    this.reload();
     const nowTime = now.getTime();
     return this.data.reminders.filter(
       (reminder) =>
@@ -263,6 +274,7 @@ export class BotStore {
   }
 
   markReminderSent(id: string) {
+    this.reload();
     const reminder = this.data.reminders.find((item) => item.id === id);
     if (reminder) {
       reminder.lastSentAt = new Date().toISOString();
@@ -289,6 +301,7 @@ export class BotStore {
     error: string,
     maxFailures = 3
   ): ReminderItem | undefined {
+    this.reload();
     const reminder = this.data.reminders.find((item) => item.id === id);
     if (!reminder) {
       return undefined;
@@ -303,7 +316,19 @@ export class BotStore {
     return reminder;
   }
 
+  cancelReminder(id: string): boolean {
+    this.reload();
+    const reminder = this.data.reminders.find((item) => item.id === id);
+    if (!reminder) {
+      return false;
+    }
+    reminder.status = "cancelled";
+    this.save();
+    return true;
+  }
+
   addUsage(record: Omit<UsageRecord, "id" | "timestamp" | "date">) {
+    this.reload();
     const now = new Date();
     this.data.usageRecords.push({
       id: this.createId("use"),
@@ -315,6 +340,7 @@ export class BotStore {
   }
 
   getUsageSummary(date?: string, chatId?: string) {
+    this.reload();
     const records = this.data.usageRecords.filter(
       (record) =>
         (!date || record.date === date) && (!chatId || record.chatId === chatId)
@@ -347,15 +373,18 @@ export class BotStore {
   }
 
   addRootUser(talkerId: string, talkerName: string) {
+    this.reload();
     this.data.rootUsers[talkerId] = talkerName;
     this.save();
   }
 
   isRootUser(talkerId: string): boolean {
+    this.reload();
     return Boolean(this.data.rootUsers[talkerId]);
   }
 
   getRootUsers() {
+    this.reload();
     return Object.entries(this.data.rootUsers).map(([talkerId, talkerName]) => ({
       talkerId,
       talkerName,
@@ -367,6 +396,7 @@ export class BotStore {
     status: ChatAccessStatus,
     updatedBy: string
   ) {
+    this.reload();
     this.data.chatAccess[context.chatId] = {
       ...context,
       status,
@@ -377,13 +407,23 @@ export class BotStore {
   }
 
   getChatAccess(chatId: string): ChatAccessRule | undefined {
+    this.reload();
     return this.data.chatAccess[chatId];
   }
 
   getChatAccessRules(status?: ChatAccessStatus): ChatAccessRule[] {
+    this.reload();
     return Object.values(this.data.chatAccess)
       .filter((rule) => !status || rule.status === status)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  clearChatAccess(chatId: string): boolean {
+    this.reload();
+    const existed = Boolean(this.data.chatAccess[chatId]);
+    delete this.data.chatAccess[chatId];
+    this.save();
+    return existed;
   }
 
   setPrivateVideoAccess(
@@ -391,6 +431,7 @@ export class BotStore {
     status: ChatAccessStatus,
     updatedBy: string
   ) {
+    this.reload();
     this.data.privateVideoAccess[context.chatId] = {
       ...context,
       status,
@@ -401,16 +442,27 @@ export class BotStore {
   }
 
   getPrivateVideoAccess(chatId: string): PrivateVideoAccessRule | undefined {
+    this.reload();
     return this.data.privateVideoAccess[chatId];
   }
 
   getPrivateVideoAccessRules(status?: ChatAccessStatus): PrivateVideoAccessRule[] {
+    this.reload();
     return Object.values(this.data.privateVideoAccess)
       .filter((rule) => !status || rule.status === status)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  clearPrivateVideoAccess(chatId: string): boolean {
+    this.reload();
+    const existed = Boolean(this.data.privateVideoAccess[chatId]);
+    delete this.data.privateVideoAccess[chatId];
+    this.save();
+    return existed;
+  }
+
   setGroupMode(groupId: string, groupName: string, mode: GroupMode) {
+    this.reload();
     this.data.groupSettings[groupId] = {
       groupId,
       groupName,
@@ -421,7 +473,12 @@ export class BotStore {
   }
 
   getGroupMode(groupId: string, fallback: GroupMode): GroupMode {
+    this.reload();
     return this.data.groupSettings[groupId]?.mode || fallback;
+  }
+
+  private reload() {
+    this.data = this.load();
   }
 
   private load(): BotData {
@@ -461,5 +518,98 @@ export class BotStore {
 
   private createId(prefix: string) {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private mergeRenamedSessionChat(
+    scope: ChatScope,
+    chatId: string,
+    chatName: string,
+    lastSeenAt: string
+  ) {
+    if (!this.isStableDisplayName(chatName, chatId)) {
+      return;
+    }
+    for (const oldChat of Object.values(this.data.knownChats)) {
+      if (
+        oldChat.chatId === chatId ||
+        oldChat.scope !== scope ||
+        oldChat.chatName !== chatName
+      ) {
+        continue;
+      }
+      if (scope === "group" && this.data.groupSettings[oldChat.chatId]) {
+        const oldRule = this.data.groupSettings[oldChat.chatId];
+        const currentRule = this.data.groupSettings[chatId];
+        if (!currentRule || oldRule.updatedAt.localeCompare(currentRule.updatedAt) > 0) {
+          this.data.groupSettings[chatId] = {
+            ...oldRule,
+            groupId: chatId,
+            groupName: chatName,
+            updatedAt: oldRule.updatedAt || lastSeenAt,
+          };
+        }
+        delete this.data.groupSettings[oldChat.chatId];
+      }
+      if (this.data.chatAccess[oldChat.chatId]) {
+        const oldRule = this.data.chatAccess[oldChat.chatId];
+        const currentRule = this.data.chatAccess[chatId];
+        if (!currentRule || oldRule.updatedAt.localeCompare(currentRule.updatedAt) > 0) {
+          this.data.chatAccess[chatId] = {
+            ...oldRule,
+            chatId,
+            chatName,
+            updatedAt: oldRule.updatedAt || lastSeenAt,
+          };
+        }
+        delete this.data.chatAccess[oldChat.chatId];
+      }
+      if (scope === "private" && this.data.privateVideoAccess[oldChat.chatId]) {
+        const oldRule = this.data.privateVideoAccess[oldChat.chatId];
+        const currentRule = this.data.privateVideoAccess[chatId];
+        if (!currentRule || oldRule.updatedAt.localeCompare(currentRule.updatedAt) > 0) {
+          this.data.privateVideoAccess[chatId] = {
+            ...oldRule,
+            chatId,
+            chatName,
+            updatedAt: oldRule.updatedAt || lastSeenAt,
+          };
+        }
+        delete this.data.privateVideoAccess[oldChat.chatId];
+      }
+      delete this.data.knownChats[oldChat.chatId];
+    }
+  }
+
+  private dedupeKnownChats(chats: KnownChat[]): KnownChat[] {
+    const byKey = new Map<string, KnownChat>();
+    for (const chat of chats) {
+      if (!this.isStableDisplayName(chat.chatName, chat.chatId)) {
+        continue;
+      }
+      const key = `${chat.scope}:${chat.chatName}`;
+      const existing = byKey.get(key);
+      if (!existing || chat.lastSeenAt.localeCompare(existing.lastSeenAt) > 0) {
+        byKey.set(key, chat);
+      }
+    }
+    return Array.from(byKey.values());
+  }
+
+  private normalizeChatName(chatName: string, chatId: string): string {
+    const name = String(chatName || "").trim();
+    return name || this.fallbackChatName(chatId);
+  }
+
+  private fallbackChatName(chatId: string): string {
+    const id = String(chatId || "");
+    return id ? `未命名${id.slice(-6)}` : "未命名会话";
+  }
+
+  private isStableDisplayName(chatName: string, chatId: string): boolean {
+    const name = String(chatName || "").trim();
+    if (!name || name === chatId) {
+      return false;
+    }
+    return !/^@{1,2}[0-9a-f]{24,}$/i.test(name);
   }
 }

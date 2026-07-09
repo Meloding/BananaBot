@@ -516,29 +516,34 @@ export class WechatCompanion {
   }
 
   private async listContactsForRoot(): Promise<RootListEntry[]> {
+    const knownContacts = this.store
+      .getKnownChats("private")
+      .map((chat) => this.knownChatToRootEntry(chat));
     if (!this.weChatBot?.Contact?.findAll) {
-      return this.store
-        .getKnownChats("private")
-        .map((chat) => this.knownChatToRootEntry(chat));
+      return knownContacts;
     }
     const contacts = await this.weChatBot.Contact.findAll();
-    return contacts
-      .filter((contact: any) => !contact.self?.() && !this.isOfficialContact(contact))
-      .map((contact: any) => ({
-        scope: "private" as ChatScope,
-        chatId: contact.id,
-        chatName: contact.name?.() || contact.id,
-      }))
+    const resolvedContacts = await Promise.all(
+      contacts
+        .filter((contact: any) => !contact.self?.() && !this.isOfficialContact(contact))
+        .map(async (contact: any) => ({
+          scope: "private" as ChatScope,
+          chatId: contact.id,
+          chatName: await this.resolveContactDisplayName(contact, undefined, false),
+        }))
+    );
+    return this.dedupeRootEntries([...resolvedContacts, ...knownContacts])
       .sort((a: RootListEntry, b: RootListEntry) =>
         a.chatName.localeCompare(b.chatName, "zh-CN")
       );
   }
 
   private async listRoomsForRoot(): Promise<RootListEntry[]> {
+    const knownRooms = this.store
+      .getKnownChats("group")
+      .map((chat) => this.knownChatToRootEntry(chat));
     if (!this.weChatBot?.Room?.findAll) {
-      return this.store
-        .getKnownChats("group")
-        .map((chat) => this.knownChatToRootEntry(chat));
+      return knownRooms;
     }
     const rooms = await this.weChatBot.Room.findAll();
     const entries: RootListEntry[] = [];
@@ -546,10 +551,89 @@ export class WechatCompanion {
       entries.push({
         scope: "group",
         chatId: room.id,
-        chatName: (await room.topic()) || room.id,
+        chatName: await this.resolveRoomDisplayName(room),
       });
     }
-    return entries.sort((a, b) => a.chatName.localeCompare(b.chatName, "zh-CN"));
+    return this.dedupeRootEntries([...entries, ...knownRooms]).sort((a, b) =>
+      a.chatName.localeCompare(b.chatName, "zh-CN")
+    );
+  }
+
+  private dedupeRootEntries(entries: RootListEntry[]): RootListEntry[] {
+    const byKey = new Map<string, RootListEntry>();
+    for (const entry of entries) {
+      if (!this.isUsefulDisplayName(entry.chatName, entry.chatId)) {
+        continue;
+      }
+      byKey.set(`${entry.scope}:${entry.chatName}`, entry);
+    }
+    return Array.from(byKey.values());
+  }
+
+  private async resolveRoomDisplayName(room: any): Promise<string> {
+    const topic = await this.safeCallString(() => room.topic?.());
+    return this.firstUsefulName([topic], room.id, "未命名群");
+  }
+
+  private async resolveContactDisplayName(
+    contact: any,
+    room?: any,
+    allowFallback = true
+  ): Promise<string> {
+    const roomAlias = room
+      ? await this.safeCallString(() => room.alias?.(contact))
+      : "";
+    const alias = await this.safeCallString(() => contact.alias?.());
+    const name = await this.safeCallString(() => contact.name?.());
+    const payload = contact.payload || {};
+    return this.firstUsefulName(
+      [
+        roomAlias,
+        alias,
+        name,
+        payload.alias,
+        payload.remark,
+        payload.displayName,
+        payload.name,
+      ],
+      contact.id,
+      allowFallback ? "未命名用户" : ""
+    );
+  }
+
+  private async safeCallString(fn: () => any): Promise<string> {
+    try {
+      const value = await fn();
+      return typeof value === "string" ? value.trim() : "";
+    } catch {
+      return "";
+    }
+  }
+
+  private firstUsefulName(
+    candidates: Array<unknown>,
+    fallbackId: string,
+    fallbackPrefix: string
+  ): string {
+    for (const candidate of candidates) {
+      const value = String(candidate || "").trim();
+      if (this.isUsefulDisplayName(value, fallbackId)) {
+        return value;
+      }
+    }
+    const suffix = String(fallbackId || "").slice(-6);
+    if (!fallbackPrefix) {
+      return "";
+    }
+    return suffix ? `${fallbackPrefix}${suffix}` : fallbackPrefix;
+  }
+
+  private isUsefulDisplayName(name: string, id?: string): boolean {
+    const value = String(name || "").trim();
+    if (!value || value === id) {
+      return false;
+    }
+    return !/^@{1,2}[0-9a-f]{24,}$/i.test(value);
   }
 
   private knownChatToRootEntry(chat: KnownChat): RootListEntry {
@@ -3576,7 +3660,7 @@ export class WechatCompanion {
       return false;
     }
     return (
-      compact.length >= 6 ||
+      compact.length >= 2 ||
       this.looksLikeOpenQuestion(compact) ||
       this.looksLikeConversationalCue(compact)
     );
@@ -3665,21 +3749,23 @@ export class WechatCompanion {
     const talker: any = message.talker();
     const room: any = message.room();
     if (room) {
-      const topic = await room.topic();
+      const topic = await this.resolveRoomDisplayName(room);
+      const talkerName = await this.resolveContactDisplayName(talker, room);
       return {
         scope: "group",
         chatId: room.id,
-        chatName: topic || room.id,
+        chatName: topic,
         talkerId: talker.id,
-        talkerName: talker.name(),
+        talkerName,
       };
     }
+    const talkerName = await this.resolveContactDisplayName(talker);
     return {
       scope: "private",
       chatId: talker.id,
-      chatName: talker.name(),
+      chatName: talkerName,
       talkerId: talker.id,
-      talkerName: talker.name(),
+      talkerName,
     };
   }
 

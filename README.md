@@ -1,6 +1,6 @@
 # BananaBot
 
-一个基于 Wechaty + 百炼/OpenAI 兼容接口的微信智能机器人。
+BananaBot 是一个基于 Wechaty + 百炼/OpenAI 兼容接口的微信智能机器人。
 
 当前版本重点能力：
 
