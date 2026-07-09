@@ -55,6 +55,7 @@ type ToolAction =
   | "summarize_today"
   | "usage_report"
   | "set_group_mode"
+  | "time_query"
   | "ignore";
 
 interface RoutedIntent {
@@ -128,6 +129,16 @@ interface PendingMediaMessage {
   processedText?: string;
 }
 
+interface PendingMediaRequest {
+  message: Message;
+  context: ChatContext;
+  text: string;
+  rawText: string;
+  preferredType: MessageType | null;
+  createdAt: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface EmoticonCacheEntry {
   meaning: string;
   timestamp: number;
@@ -155,6 +166,7 @@ export class WechatCompanion {
   private lastGroupReplyAt: Map<string, number> = new Map();
   private lastMediaAutoProcessAt: Map<string, number> = new Map();
   private pendingMediaByChat: Map<string, PendingMediaMessage[]> = new Map();
+  private pendingMediaRequestsByChat: Map<string, PendingMediaRequest> = new Map();
   private pendingApprovals: Map<string, PendingApproval> = new Map();
   private pendingFilesByChat: Map<string, string[]> = new Map();
   private rootLastListByUser: Map<string, RootListEntry[]> = new Map();
@@ -162,6 +174,7 @@ export class WechatCompanion {
   private lastEmoticonReplyByChat: Map<string, { key: string; timestamp: number }> =
     new Map();
   private readonly pendingMediaTtlMs = 10 * 60 * 1000;
+  private readonly pendingMediaRequestWaitMs = 8 * 1000;
   private readonly pendingMediaLimit = 6;
   private readonly pendingApprovalTtlMs = 10 * 60 * 1000;
   private readonly mediaAutoProcessCooldownMs = 60 * 1000;
@@ -337,6 +350,7 @@ export class WechatCompanion {
           "/视频允许 编号",
           "/视频禁止 编号",
           "/视频白名单",
+          "/群模式 编号 模式（模式可用 1-5、安静、智能、活跃、超活跃、话唠）",
           "/总结 编号",
           "/root列表",
         ].join("\n")
@@ -404,6 +418,31 @@ export class WechatCompanion {
       const chats = this.store.getKnownChats().map((chat) => this.knownChatToRootEntry(chat));
       this.rootLastListByUser.set(context.talkerId, chats);
       await this.replyToContext(message, context, this.formatRootList(chats, "已知会话"));
+      return true;
+    }
+
+    const groupModeMatch = compact.match(/^\/群模式\s+(.+?)\s+(\S+)$/);
+    if (groupModeMatch) {
+      const target = this.resolveRootListEntry(context.talkerId, groupModeMatch[1]);
+      const mode = this.parseGroupModeValue(groupModeMatch[2]);
+      if (!target) {
+        await this.replyToContext(message, context, "没找到这个群。请先发送 /群列表 或 /会话列表。");
+        return true;
+      }
+      if (target.scope !== "group") {
+        await this.replyToContext(message, context, "群模式只能设置群聊，不能设置好友私聊。");
+        return true;
+      }
+      if (!mode) {
+        await this.replyToContext(message, context, this.groupModeMenu());
+        return true;
+      }
+      this.store.setGroupMode(target.chatId, target.chatName, mode);
+      await this.replyToContext(
+        message,
+        context,
+        `已设置 [群] ${target.chatName}：${this.describeGroupMode(mode)}`
+      );
       return true;
     }
 
@@ -533,9 +572,15 @@ export class WechatCompanion {
         entry.scope === "private"
           ? `][视频:${videoRule?.status === "allow" ? "允许" : videoRule?.status === "deny" ? "禁止" : "默认"}`
           : "";
+      const groupMode =
+        entry.scope === "group"
+          ? `][模式:${this.shortGroupModeLabel(
+              this.store.getGroupMode(entry.chatId, Config.defaultGroupMode)
+            )}`
+          : "";
       return `${index + 1}. [${entry.scope === "group" ? "群" : "好友"}][${
         status
-      }${videoStatus}] ${entry.chatName}`;
+      }${videoStatus}${groupMode}] ${entry.chatName}`;
     });
     if (entries.length > lines.length) {
       lines.push(`还有 ${entries.length - lines.length} 个未显示。`);
@@ -647,6 +692,13 @@ export class WechatCompanion {
       context,
       rawText
     );
+    if (
+      !mediaContext &&
+      this.shouldWaitForIncomingMedia(cleanText || rawText, context, rawText)
+    ) {
+      this.setPendingMediaRequest(message, context, cleanText || rawText, rawText);
+      return;
+    }
     const enrichedText = await this.enrichTextWithLink(cleanText || rawText);
     const userText = mediaContext
       ? [
@@ -768,6 +820,8 @@ export class WechatCompanion {
         return this.handleUsageReport(context);
       case "set_group_mode":
         return this.handleSetGroupMode(intent, context);
+      case "time_query":
+        return this.handleTimeQuery();
       case "ignore":
         return intent.reply || "";
       case "chat":
@@ -838,6 +892,9 @@ export class WechatCompanion {
     context: ChatContext
   ): RoutedIntent | null {
     const userText = text.split("\n\n用户正在询问最近收到的媒体")[0].trim();
+    if (this.isTimeQueryRequest(userText)) {
+      return { action: "time_query" };
+    }
     if (this.isUsageReportRequest(userText)) {
       if (this.wantsGeneratedFile(userText)) {
         return {
@@ -919,6 +976,13 @@ export class WechatCompanion {
   private isUsageReportRequest(text: string): boolean {
     return /(token|tokens|调用|api|模型).*(消耗|用量|统计|总消耗|花费|成本|调用次数)|((消耗|用量|统计|花费|成本).*(token|tokens|调用|api|模型))/i.test(
       text.replace(/\s+/g, "")
+    );
+  }
+
+  private isTimeQueryRequest(text: string): boolean {
+    const compact = text.replace(/\s+/g, "");
+    return /^(现在)?几点了?$|^现在时间$|^当前时间$|^什么时间$|^今天几号$|^今天星期几$|^现在是?什么时候$|^报时$/.test(
+      compact
     );
   }
 
@@ -1332,6 +1396,12 @@ export class WechatCompanion {
     }
     this.store.setGroupMode(context.chatId, context.chatName, mode);
     return `已切换：${this.describeGroupMode(mode)}`;
+  }
+
+  private handleTimeQuery(): string {
+    const now = new Date();
+    const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+    return `现在是 ${this.formatLocalDateTime(now)}，星期${weekdays[now.getDay()]}。`;
   }
 
   private async handleAgentTask(
@@ -1873,6 +1943,10 @@ export class WechatCompanion {
 
     this.rememberPendingMedia(message, context, messageType, typeName, cacheKey);
 
+    if (await this.answerPendingMediaRequest(message, context, messageType, typeName)) {
+      return;
+    }
+
     if (
       messageType === MessageType.Emoticon &&
       this.isRepeatedEmoticon(context.chatId, cacheKey)
@@ -1961,6 +2035,138 @@ export class WechatCompanion {
         messageType: MessageType.Text,
       });
     }
+  }
+
+  private shouldWaitForIncomingMedia(
+    text: string,
+    context: ChatContext,
+    rawText: string = text
+  ): boolean {
+    if (!this.referencesRecentMedia(text, rawText)) {
+      return false;
+    }
+    this.prunePendingMedia(context.chatId);
+    return !(this.pendingMediaByChat.get(context.chatId) || []).length;
+  }
+
+  private setPendingMediaRequest(
+    message: Message,
+    context: ChatContext,
+    text: string,
+    rawText: string
+  ) {
+    this.clearPendingMediaRequest(context.chatId);
+    const preferredType = this.preferredMediaTypeFromText(text);
+    const createdAt = Date.now();
+    const timer = setTimeout(() => {
+      const pending = this.pendingMediaRequestsByChat.get(context.chatId);
+      if (!pending || pending.createdAt !== createdAt) {
+        return;
+      }
+      this.pendingMediaRequestsByChat.delete(context.chatId);
+      this.replyToContext(
+        message,
+        context,
+        "我还没收到对应的图片/视频/语音，可能还在传。等媒体到了我再看。"
+      )
+        .then((sentMessage) => {
+          if (sentMessage) {
+            this.store.addMessage({
+              ...context,
+              role: "assistant",
+              text: sentMessage,
+              messageType: MessageType.Text,
+            });
+          }
+        })
+        .catch((error) =>
+          console.error(`❌ Failed to reply pending media timeout: ${error}`)
+        );
+    }, this.pendingMediaRequestWaitMs);
+
+    this.pendingMediaRequestsByChat.set(context.chatId, {
+      message,
+      context,
+      text,
+      rawText,
+      preferredType,
+      createdAt,
+      timer,
+    });
+  }
+
+  private clearPendingMediaRequest(chatId: string) {
+    const pending = this.pendingMediaRequestsByChat.get(chatId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingMediaRequestsByChat.delete(chatId);
+    }
+  }
+
+  private async answerPendingMediaRequest(
+    message: Message,
+    context: ChatContext,
+    messageType: MessageType,
+    typeName: string
+  ): Promise<boolean> {
+    const pending = this.pendingMediaRequestsByChat.get(context.chatId);
+    if (!pending) {
+      return false;
+    }
+    if (pending.preferredType && pending.preferredType !== messageType) {
+      return false;
+    }
+    if (Date.now() - pending.createdAt > this.pendingMediaRequestWaitMs + 30 * 1000) {
+      this.clearPendingMediaRequest(context.chatId);
+      return false;
+    }
+
+    this.clearPendingMediaRequest(context.chatId);
+    let understoodText = "";
+    try {
+      understoodText = await this.processMediaMessage(message, pending.context, messageType);
+    } catch (error) {
+      console.error(`❌ Failed to process pending ${typeName} message: ${error}`);
+      await this.replyToContext(
+        message,
+        context,
+        `刚才那条${typeName}我收到了，但理解失败了。可以重新发一次，或者换成更清晰的截图/文字。`
+      );
+      return true;
+    }
+
+    if (!understoodText.trim()) {
+      return true;
+    }
+
+    this.store.addMessage({
+      ...pending.context,
+      talkerName: context.talkerName,
+      role: "user",
+      text: understoodText,
+      messageType,
+    });
+    this.markMediaAutoProcessed(context.chatId, messageType);
+
+    const userText = [
+      pending.text,
+      "",
+      "用户刚才先发出了媒体理解请求，随后这条媒体到达。以下是媒体理解结果：",
+      `最近媒体类型：${typeName}`,
+      `发送者：${context.talkerName}`,
+      understoodText,
+    ].join("\n");
+    const replyMessage = await this.handleUserText(userText, pending.context);
+    if (replyMessage) {
+      const sentMessage = await this.replyToContext(message, context, replyMessage);
+      this.store.addMessage({
+        ...pending.context,
+        role: "assistant",
+        text: sentMessage,
+        messageType: MessageType.Text,
+      });
+    }
+    return true;
   }
 
   private shouldProcessMediaMessage(
@@ -2161,9 +2367,7 @@ export class WechatCompanion {
   private referencesRecentMedia(text: string, rawText: string = text): boolean {
     const compact = text.replace(/\s+/g, "");
     return (
-      this.isMentioned(rawText) ||
-      this.startsWithTrigger(text) ||
-      /这张|这个图|这个表情|这段视频|这条语音|刚才.*(图|图片|截图|照片|视频|语音|音频|表情)|上面.*(图|图片|截图|照片|视频|语音|音频|表情)|上一条|前面.*(图|图片|截图|照片|视频|语音|音频|表情)|图片|截图|照片|图里|图中|视频|语音|音频|表情包|表情|看一下|看看|识别|转文字|解释一下/i.test(
+      /这张|这个图|这个表情|这段视频|这条语音|这个.*(啥意思|什么意思|说的啥|讲的啥|说什么|讲什么)|刚才.*(图|图片|截图|照片|视频|语音|音频|表情)|上面.*(图|图片|截图|照片|视频|语音|音频|表情)|上一条|前面.*(图|图片|截图|照片|视频|语音|音频|表情)|图片|截图|照片|图里|图中|视频|语音|音频|表情包|表情|看一下|看看|识别|转文字|解释一下/i.test(
         compact
       )
     );
@@ -3712,6 +3916,7 @@ export class WechatCompanion {
       "summarize_today",
       "usage_report",
       "set_group_mode",
+      "time_query",
       "ignore",
     ].includes(String(action));
   }
@@ -3720,6 +3925,34 @@ export class WechatCompanion {
     return ["quiet", "smart", "active", "super_active", "talkative"].includes(
       String(mode)
     );
+  }
+
+  private parseGroupModeValue(text: string): GroupMode | null {
+    const compact = text.trim().replace(/^\/+/, "").toLowerCase();
+    const modeMap: Record<string, GroupMode> = {
+      "1": "quiet",
+      quiet: "quiet",
+      "安静": "quiet",
+      "少说话": "quiet",
+      "2": "smart",
+      smart: "smart",
+      "智能": "smart",
+      "正常": "smart",
+      "3": "active",
+      active: "active",
+      "活跃": "active",
+      "4": "super_active",
+      superactive: "super_active",
+      "super_active": "super_active",
+      "超活跃": "super_active",
+      "超级活跃": "super_active",
+      "5": "talkative",
+      talkative: "talkative",
+      chatty: "talkative",
+      "话唠": "talkative",
+      "畅聊": "talkative",
+    };
+    return modeMap[compact] || null;
   }
 
   private mayNeedTool(text: string, context?: ChatContext): boolean {
@@ -3909,6 +4142,17 @@ export class WechatCompanion {
       talkative: `话唠模式：更像群友聊天，${Config.talkativeGroupCooldownSeconds} 秒冷却`,
     };
     return descriptions[mode];
+  }
+
+  private shortGroupModeLabel(mode: GroupMode): string {
+    const labels: Record<GroupMode, string> = {
+      quiet: "安静",
+      smart: "智能",
+      active: "活跃",
+      super_active: "超活跃",
+      talkative: "话唠",
+    };
+    return labels[mode];
   }
 
   private parseChineseNumber(text: string): number | null {
