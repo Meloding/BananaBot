@@ -264,11 +264,60 @@ statusPort: 8791
 | `stripMarkdown` | 发送微信前是否移除 Markdown 标记 |
 | `allowGlobalUsageReport` | 私聊中是否允许查看全局 token 用量 |
 | `generatedFilesPath` | agent 生成文件的保存目录 |
-| `statusPageEnabled` | 是否启用只读运行状态页 |
+| `statusPageEnabled` | 是否启用状态控制台 |
 | `statusHost` | 状态页监听地址，公网部署建议绑定 `127.0.0.1` 后由 Nginx 反代 |
 | `statusPort` | 状态页监听端口 |
 
-状态页只展示登录状态、运行时长、模型名、消息/API 计数和最近错误，不展示二维码、聊天原文、API Key 或 root 授权串。服务器部署时可以用 Nginx 反代到 `/wechat-status/`，JSON 接口为 `/wechat-status/status.json`。
+### 状态控制台
+
+BananaBot 内置一个轻量状态控制台，适合部署到 `http://你的域名/wechat-status/` 查看运行状态和管理会话。控制台复用 `rootAuthToken` 登录；没有配置 `rootAuthToken` 时，控制台登录会被禁用。
+
+最小配置：
+
+```yaml
+rootAuthToken: "你的 root 长串"
+statusPageEnabled: true
+statusHost: "127.0.0.1"
+statusPort: 8791
+```
+
+建议让状态服务只监听 `127.0.0.1`，再由 Nginx 反代到公网域名：
+
+```nginx
+location /wechat-status/ {
+    proxy_pass http://127.0.0.1:8791/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+修改 Nginx 后检查并重载：
+
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+可用地址：
+
+| 地址 | 说明 |
+| --- | --- |
+| `/wechat-status/` | Web 控制台，使用 `rootAuthToken` 登录 |
+| `/wechat-status/healthz` | 健康检查接口，不需要登录 |
+| `/wechat-status/status.json` | 运行状态 JSON，需要登录 |
+| `/wechat-status/api/overview` | 总览数据，需要登录 |
+| `/wechat-status/api/chats` | 会话列表，需要登录 |
+| `/wechat-status/api/chat?id=...` | 单个会话详情，需要登录 |
+| `/wechat-status/api/usage` | token 用量统计，需要登录 |
+| `/wechat-status/api/reminders` | 提醒列表，需要登录 |
+| `/wechat-status/api/memories` | 记忆列表，需要登录 |
+| `/wechat-status/api/recent` | 最近消息和模型调用事件，需要登录 |
+
+控制台目前可以查看登录状态、运行时长、模型配置、消息/API 计数、最近错误、群聊/私聊会话、token 用量、提醒、记忆和最近事件，也可以调整群聊模式、会话允许/禁用状态、私聊视频权限和取消提醒。
+
+安全建议：务必把 `rootAuthToken` 当成管理员密码保管，不要发到群里、截图或写进公开仓库。公网访问建议配 HTTPS；如果只给自己使用，也可以额外加一层服务器防火墙或 Nginx basic auth。
 
 ## 运行和维护
 

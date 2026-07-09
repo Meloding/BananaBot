@@ -22,133 +22,46 @@ import {
   ReminderItem,
   ReminderRepeat,
 } from "./store.js";
+import { MessageType } from "./message-type.js";
+import {
+  prepareReplyForWechat,
+  splitWechatMessage,
+} from "./reply-format.js";
+import {
+  cleanHtmlText,
+  createEmoticonStoryboardFilter,
+  detectMediaTypeFromBuffer,
+  extensionFromMediaType,
+  extractUrlsFromXml,
+  hasStillImageMagic,
+  inferMediaType,
+  isInlineVideoMediaType,
+  isUnsafeHost,
+} from "./media-utils.js";
+import {
+  describeGroupMode,
+  groupModeMenu,
+  isGroupMode,
+  looksLikeModeSwitchRequest,
+  parseDirectGroupModeCommand,
+  parseGroupModeValue,
+  shortGroupModeLabel,
+} from "./group-mode.js";
+import type {
+  AgentToolName,
+  CompletionResult,
+  EmoticonCacheEntry,
+  MediaFile,
+  ParsedReminder,
+  PendingApproval,
+  PendingMediaMessage,
+  PendingMediaRequest,
+  RootListEntry,
+  RoutedIntent,
+  ToolAction,
+} from "./companion-types.js";
 
 const execFileAsync = promisify(execFile);
-
-enum MessageType {
-  Unknown = 0,
-  Attachment = 1,
-  Audio = 2,
-  Contact = 3,
-  ChatHistory = 4,
-  Emoticon = 5,
-  Image = 6,
-  Text = 7,
-  Location = 8,
-  MiniProgram = 9,
-  GroupNote = 10,
-  Transfer = 11,
-  RedEnvelope = 12,
-  Recalled = 13,
-  Url = 14,
-  Video = 15,
-  Post = 16,
-}
-
-type ToolAction =
-  | "chat"
-  | "remember"
-  | "recall"
-  | "reminder"
-  | "list_reminders"
-  | "agent_task"
-  | "summarize_today"
-  | "usage_report"
-  | "set_group_mode"
-  | "time_query"
-  | "ignore";
-
-interface RoutedIntent {
-  action: ToolAction;
-  mode?: GroupMode;
-  agentTool?: AgentToolName;
-  risk?: AgentRisk;
-  code?: string;
-  codeLanguage?: string;
-  fileType?: string;
-  title?: string;
-  reply?: string;
-  memory?: string;
-  query?: string;
-  remindAt?: string;
-  reminderContent?: string;
-  repeat?: ReminderRepeat;
-  repeatCount?: number;
-  tags?: string[];
-  reason?: string;
-}
-
-interface ParsedReminder {
-  remindAt: Date;
-  content: string;
-  repeat: ReminderRepeat;
-  repeatCount: number;
-}
-
-type AgentToolName =
-  | "schedule_document"
-  | "file_create"
-  | "usage_report_file"
-  | "code_run"
-  | "plan_only";
-
-type AgentRisk = "low" | "medium" | "high";
-
-interface PendingApproval {
-  id: string;
-  createdAt: number;
-  context: ChatContext;
-  intent: RoutedIntent;
-  originalText: string;
-}
-
-interface CompletionResult {
-  text: string;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  estimated: boolean;
-}
-
-interface MediaFile {
-  name: string;
-  mediaType: string;
-  extension: string;
-  buffer: Buffer;
-  base64: string;
-  dataUrl: string;
-}
-
-interface PendingMediaMessage {
-  message: Message;
-  messageType: MessageType;
-  typeName: string;
-  cacheKey: string;
-  timestamp: number;
-  talkerName: string;
-  processedText?: string;
-}
-
-interface PendingMediaRequest {
-  message: Message;
-  context: ChatContext;
-  text: string;
-  rawText: string;
-  preferredType: MessageType | null;
-  createdAt: number;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-interface EmoticonCacheEntry {
-  meaning: string;
-  timestamp: number;
-}
-
-interface RootListEntry {
-  scope: ChatScope;
-  chatId: string;
-  chatName: string;
-}
 
 export class WechatCompanion {
   botName: string = "";
@@ -277,21 +190,21 @@ export class WechatCompanion {
       return true;
     }
 
-    const modeCommand = this.parseDirectGroupModeCommand(text);
+    const modeCommand = parseDirectGroupModeCommand(text);
     if (context.scope === "group" && modeCommand.type === "menu") {
-      await this.replyToContext(message, context, this.groupModeMenu());
+      await this.replyToContext(message, context, groupModeMenu());
       return true;
     }
 
     if (context.scope === "group" && modeCommand.type === "status") {
       const mode = this.store.getGroupMode(context.chatId, Config.defaultGroupMode);
-      await this.replyToContext(message, context, `当前是：${this.describeGroupMode(mode)}`);
+      await this.replyToContext(message, context, `当前是：${describeGroupMode(mode)}`);
       return true;
     }
 
     if (context.scope === "group" && modeCommand.type === "switch") {
       this.store.setGroupMode(context.chatId, context.chatName, modeCommand.mode);
-      await this.replyToContext(message, context, `已切换：${this.describeGroupMode(modeCommand.mode)}`);
+      await this.replyToContext(message, context, `已切换：${describeGroupMode(modeCommand.mode)}`);
       return true;
     }
 
@@ -424,7 +337,7 @@ export class WechatCompanion {
     const groupModeMatch = compact.match(/^\/群模式\s+(.+?)\s+(\S+)$/);
     if (groupModeMatch) {
       const target = this.resolveRootListEntry(context.talkerId, groupModeMatch[1]);
-      const mode = this.parseGroupModeValue(groupModeMatch[2]);
+      const mode = parseGroupModeValue(groupModeMatch[2]);
       if (!target) {
         await this.replyToContext(message, context, "没找到这个群。请先发送 /群列表 或 /会话列表。");
         return true;
@@ -434,14 +347,14 @@ export class WechatCompanion {
         return true;
       }
       if (!mode) {
-        await this.replyToContext(message, context, this.groupModeMenu());
+        await this.replyToContext(message, context, groupModeMenu());
         return true;
       }
       this.store.setGroupMode(target.chatId, target.chatName, mode);
       await this.replyToContext(
         message,
         context,
-        `已设置 [群] ${target.chatName}：${this.describeGroupMode(mode)}`
+        `已设置 [群] ${target.chatName}：${describeGroupMode(mode)}`
       );
       return true;
     }
@@ -658,7 +571,7 @@ export class WechatCompanion {
           : "";
       const groupMode =
         entry.scope === "group"
-          ? `][模式:${this.shortGroupModeLabel(
+          ? `][模式:${shortGroupModeLabel(
               this.store.getGroupMode(entry.chatId, Config.defaultGroupMode)
             )}`
           : "";
@@ -1474,12 +1387,12 @@ export class WechatCompanion {
     if (context.scope !== "group") {
       return "群聊模式只能在群里切换。";
     }
-    const mode = this.isGroupMode(intent.mode) ? intent.mode : null;
+    const mode = isGroupMode(intent.mode) ? intent.mode : null;
     if (!mode) {
-      return this.groupModeMenu();
+      return groupModeMenu();
     }
     this.store.setGroupMode(context.chatId, context.chatName, mode);
-    return `已切换：${this.describeGroupMode(mode)}`;
+    return `已切换：${describeGroupMode(mode)}`;
   }
 
   private handleTimeQuery(): string {
@@ -2607,7 +2520,7 @@ export class WechatCompanion {
   private async normalizeEmoticonImageDataUrl(media: MediaFile): Promise<string> {
     if (
       /^image\/(jpeg|jpg|png)$/i.test(media.mediaType) &&
-      this.hasStillImageMagic(media.buffer)
+      hasStillImageMagic(media.buffer)
     ) {
       return media.dataUrl;
     }
@@ -2619,7 +2532,10 @@ export class WechatCompanion {
     try {
       fs.writeFileSync(inputPath, media.buffer);
       const frameCount = await this.countMediaFrames(inputPath);
-      const filter = this.createEmoticonStoryboardFilter(frameCount);
+      const filter = createEmoticonStoryboardFilter(
+        frameCount,
+        this.maxEmoticonStoryboardFrames
+      );
       await execFileAsync(
         "ffmpeg",
         [
@@ -2674,65 +2590,8 @@ export class WechatCompanion {
     }
   }
 
-  private createEmoticonStoryboardFilter(frameCount: number | null): string {
-    const maxFrames = this.maxEmoticonStoryboardFrames;
-    if (!frameCount || frameCount < 1) {
-      return `${this.storyboardFrameFilter()},tile=4x4:padding=8:margin=8:color=white`;
-    }
-
-    const indices =
-      frameCount <= maxFrames
-        ? Array.from({ length: frameCount }, (_, index) => index)
-        : Array.from({ length: maxFrames }, (_, index) =>
-            Math.round((index * (frameCount - 1)) / (maxFrames - 1))
-          );
-    const uniqueIndices = [...new Set(indices)].sort((a, b) => a - b);
-    const cols = Math.ceil(Math.sqrt(uniqueIndices.length));
-    const rows = Math.ceil(uniqueIndices.length / cols);
-    const select = uniqueIndices.map((index) => `eq(n\\,${index})`).join("+");
-    return `select=${select},${this.storyboardFrameFilter()},tile=${cols}x${rows}:padding=8:margin=8:color=white`;
-  }
-
-  private storyboardFrameFilter(): string {
-    return [
-      "scale=240:240:force_original_aspect_ratio=decrease",
-      "pad=240:240:(ow-iw)/2:(oh-ih)/2:white",
-    ].join(",");
-  }
-
-  private hasStillImageMagic(buffer: Buffer): boolean {
-    return ["image/jpeg", "image/png"].includes(
-      this.detectMediaTypeFromBuffer(buffer)
-    );
-  }
-
-  private detectMediaTypeFromBuffer(buffer: Buffer): string {
-    if (buffer.length < 12) {
-      return "";
-    }
-    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-      return "image/jpeg";
-    }
-    if (
-      buffer[0] === 0x89 &&
-      buffer[1] === 0x50 &&
-      buffer[2] === 0x4e &&
-      buffer[3] === 0x47
-    ) {
-      return "image/png";
-    }
-    const head = buffer.slice(0, 12).toString("ascii");
-    if (head.startsWith("GIF87a") || head.startsWith("GIF89a")) {
-      return "image/gif";
-    }
-    if (head.startsWith("RIFF") && head.slice(8, 12) === "WEBP") {
-      return "image/webp";
-    }
-    return "";
-  }
-
   private saveDebugMedia(media: MediaFile, prefix: string): string | null {
-    const ext = media.extension || this.extensionFromMediaType(media.mediaType) || ".bin";
+    const ext = media.extension || extensionFromMediaType(media.mediaType) || ".bin";
     return this.saveDebugBuffer(media.buffer, `${prefix}${ext}`);
   }
 
@@ -2742,7 +2601,7 @@ export class WechatCompanion {
       return null;
     }
     const mediaType = match[1];
-    const ext = this.extensionFromMediaType(mediaType) || ".bin";
+    const ext = extensionFromMediaType(mediaType) || ".bin";
     return this.saveDebugBuffer(Buffer.from(match[2], "base64"), `${prefix}${ext}`);
   }
 
@@ -2765,23 +2624,6 @@ export class WechatCompanion {
       console.warn(`failed to save debug media: ${error}`);
       return null;
     }
-  }
-
-  private extensionFromMediaType(mediaType: string): string {
-    const map: Record<string, string> = {
-      "image/jpeg": ".jpg",
-      "image/jpg": ".jpg",
-      "image/png": ".png",
-      "image/gif": ".gif",
-      "image/webp": ".webp",
-      "video/mp4": ".mp4",
-      "video/quicktime": ".mov",
-      "audio/silk": ".sil",
-      "audio/amr": ".amr",
-      "audio/mpeg": ".mp3",
-      "audio/wav": ".wav",
-    };
-    return map[mediaType.toLowerCase()] || "";
   }
 
   private async normalizeVisionImageDataUrl(media: MediaFile): Promise<string> {
@@ -3058,7 +2900,7 @@ export class WechatCompanion {
   ): Promise<MediaFile> {
     if (
       media.buffer.length <= Config.videoInlineMaxBytes &&
-      this.isInlineVideoMediaType(media.mediaType, media.extension)
+      isInlineVideoMediaType(media.mediaType, media.extension)
     ) {
       return {
         ...media,
@@ -3172,10 +3014,6 @@ export class WechatCompanion {
       return `[视频理解]\n${result.text}`;
   }
 
-  private isInlineVideoMediaType(mediaType: string, extension: string): boolean {
-    return mediaType === "video/mp4" || extension === ".mp4";
-  }
-
   private async readMessageMedia(
     message: Message,
     messageType: MessageType
@@ -3220,7 +3058,7 @@ export class WechatCompanion {
       );
     }
     const extension = path.extname(name).toLowerCase();
-    const mediaType = this.inferMediaType(fileBoxMediaType, extension, messageType);
+    const mediaType = inferMediaType(fileBoxMediaType, extension, messageType);
     const base64 = buffer.toString("base64");
     return {
       name,
@@ -3242,7 +3080,7 @@ export class WechatCompanion {
     rawXml: string,
     fallbackName: string
   ): Promise<MediaFile | null> {
-    const urls = this.extractUrlsFromXml(rawXml);
+    const urls = extractUrlsFromXml(rawXml);
     for (const urlText of urls) {
       try {
         const media = await this.downloadMediaFile(urlText, fallbackName);
@@ -3257,56 +3095,24 @@ export class WechatCompanion {
     return null;
   }
 
-  private extractUrlsFromXml(rawXml: string): string[] {
-    const urls: string[] = [];
-    const attrPattern = /\b(?:cdnurl|thumburl|encrypturl|url)\s*=\s*"([^"]+)"/gi;
-    let match: RegExpExecArray | null;
-    while ((match = attrPattern.exec(rawXml))) {
-      const decoded = this.decodeXmlAttribute(match[1]);
-      if (/^https?:\/\//i.test(decoded)) {
-        urls.push(decoded);
-      }
-    }
-    return [...new Set(urls)];
-  }
-
-  private decodeXmlAttribute(text: string): string {
-    let previous = "";
-    let decoded = text;
-    for (let index = 0; index < 5 && decoded !== previous; index += 1) {
-      previous = decoded;
-      decoded = decoded
-        .replace(/&amp;/g, "&")
-        .replace(/&quot;/g, '"')
-        .replace(/&apos;/g, "'")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-        .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
-          String.fromCharCode(parseInt(code, 16))
-        );
-    }
-    return decoded;
-  }
-
   private async downloadMediaFile(
     urlText: string,
     fallbackName: string
   ): Promise<MediaFile> {
     const url = new URL(urlText);
-    if (!["http:", "https:"].includes(url.protocol) || this.isUnsafeHost(url.hostname)) {
+    if (!["http:", "https:"].includes(url.protocol) || isUnsafeHost(url.hostname)) {
       throw new Error("unsafe media url");
     }
     const { buffer, mediaType } = await this.fetchBinary(url, Config.maxMediaBytes);
-    const detected = this.detectMediaTypeFromBuffer(buffer);
+    const detected = detectMediaTypeFromBuffer(buffer);
     const finalMediaType = detected || mediaType;
     const urlExt = path.extname(url.pathname).toLowerCase();
     const extension =
-      this.extensionFromMediaType(finalMediaType) ||
+      extensionFromMediaType(finalMediaType) ||
       urlExt ||
       path.extname(fallbackName).toLowerCase();
     const name = path.basename(url.pathname) || fallbackName || `emoticon${extension}`;
-    const inferredMediaType = this.inferMediaType(
+    const inferredMediaType = inferMediaType(
       finalMediaType,
       extension,
       MessageType.Emoticon
@@ -3320,43 +3126,6 @@ export class WechatCompanion {
       base64,
       dataUrl: `data:${inferredMediaType};base64,${base64}`,
     };
-  }
-
-  private inferMediaType(
-    mediaType: string,
-    extension: string,
-    messageType: MessageType
-  ): string {
-    if (mediaType && mediaType !== "application/unknown") {
-      return mediaType;
-    }
-    const map: Record<string, string> = {
-      ".jpg": "image/jpeg",
-      ".jpeg": "image/jpeg",
-      ".png": "image/png",
-      ".gif": "image/gif",
-      ".webp": "image/webp",
-      ".mp3": "audio/mpeg",
-      ".wav": "audio/wav",
-      ".m4a": "audio/mp4",
-      ".mp4": "video/mp4",
-      ".mov": "video/quicktime",
-      ".sil": "audio/silk",
-      ".amr": "audio/amr",
-    };
-    if (map[extension]) {
-      return map[extension];
-    }
-    if (messageType === MessageType.Image || messageType === MessageType.Emoticon) {
-      return "image/jpeg";
-    }
-    if (messageType === MessageType.Audio) {
-      return "audio/silk";
-    }
-    if (messageType === MessageType.Video) {
-      return "video/mp4";
-    }
-    return "application/octet-stream";
   }
 
   private async extractVideoFrames(
@@ -3416,7 +3185,7 @@ export class WechatCompanion {
 
   private async fetchWebPageSnippet(urlText: string): Promise<string> {
     const url = new URL(urlText);
-    if (!["http:", "https:"].includes(url.protocol) || this.isUnsafeHost(url.hostname)) {
+    if (!["http:", "https:"].includes(url.protocol) || isUnsafeHost(url.hostname)) {
       return "";
     }
     const html = await this.fetchText(url, 120000);
@@ -3431,7 +3200,7 @@ export class WechatCompanion {
       .replace(/&gt;/g, ">")
       .replace(/\s+/g, " ")
       .trim();
-    return [`标题：${this.cleanHtmlText(title)}`, `正文摘录：${body.slice(0, 1800)}`]
+    return [`标题：${cleanHtmlText(title)}`, `正文摘录：${body.slice(0, 1800)}`]
       .filter((line) => !line.endsWith("："))
       .join("\n");
   }
@@ -3453,7 +3222,7 @@ export class WechatCompanion {
           if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
             response.resume();
             const nextUrl = new URL(response.headers.location, url);
-            if (this.isUnsafeHost(nextUrl.hostname)) {
+            if (isUnsafeHost(nextUrl.hostname)) {
               reject(new Error("unsafe redirect host"));
               return;
             }
@@ -3505,7 +3274,7 @@ export class WechatCompanion {
           if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
             response.resume();
             const nextUrl = new URL(response.headers.location, url);
-            if (this.isUnsafeHost(nextUrl.hostname)) {
+            if (isUnsafeHost(nextUrl.hostname)) {
               reject(new Error("unsafe redirect host"));
               return;
             }
@@ -3544,25 +3313,6 @@ export class WechatCompanion {
     });
   }
 
-  private isUnsafeHost(hostname: string): boolean {
-    const host = hostname.toLowerCase();
-    if (host === "localhost" || host.endsWith(".local")) {
-      return true;
-    }
-    return /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(
-      host
-    );
-  }
-
-  private cleanHtmlText(text: string): string {
-    return text
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
   private shouldRespond(text: string, context: ChatContext): boolean {
     if (this.pendingApprovals.has(context.chatId) && this.isApprovalReplyText(text)) {
       return true;
@@ -3573,7 +3323,7 @@ export class WechatCompanion {
 
     const mode = this.store.getGroupMode(context.chatId, Config.defaultGroupMode);
     const direct = this.isMentioned(text) || this.startsWithTrigger(text);
-    const modeSwitch = this.looksLikeModeSwitchRequest(text);
+    const modeSwitch = looksLikeModeSwitchRequest(text);
     if (mode === "quiet") {
       return direct || modeSwitch;
     }
@@ -3808,7 +3558,7 @@ export class WechatCompanion {
     talker: RoomInterface | ContactInterface,
     message: string
   ): Promise<void> {
-    const messages = this.splitWechatMessage(
+    const messages = splitWechatMessage(
       message,
       Config.replyMaxLength || this.SINGLE_MESSAGE_MAX_SIZE,
       Config.replyMaxSegments || 8
@@ -3820,90 +3570,11 @@ export class WechatCompanion {
   }
 
   private prepareReplyForWechat(text: string, context?: ChatContext): string {
-    const withoutMarkdown = Config.stripMarkdown ? this.stripMarkdown(text) : text;
-    return this.stripReplySpeakerPrefix(withoutMarkdown, context)
-      .replace(/\n{4,}/g, "\n\n")
-      .replace(/[ \t]+\n/g, "\n")
-      .trim();
-  }
-
-  private stripReplySpeakerPrefix(text: string, context?: ChatContext): string {
-    if (context?.scope !== "private") {
-      return text;
-    }
-    let result = text.trimStart();
-    const names = [
-      context.talkerName,
-      this.botName,
-      context.chatName,
-      "用户",
-      "User",
-      "Assistant",
-      "助手",
-      "机器人",
-    ].filter(Boolean);
-    for (const name of names) {
-      result = result.replace(
-        new RegExp(`^${this.escapeRegExp(name)}\\s*[:：]\\s*`),
-        ""
-      );
-    }
-    return result;
-  }
-
-  private escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-
-  private stripMarkdown(text: string): string {
-    return text
-      .replace(/```[\s\S]*?```/g, (block) =>
-        block.replace(/```[a-zA-Z0-9_-]*/g, "").replace(/```/g, "")
-      )
-      .replace(/`([^`]+)`/g, "$1")
-      .replace(/\*\*([^*]+)\*\*/g, "$1")
-      .replace(/__([^_]+)__/g, "$1")
-      .replace(/\*([^*\n]+)\*/g, "$1")
-      .replace(/_([^_\n]+)_/g, "$1")
-      .replace(/^#{1,6}\s+/gm, "")
-      .replace(/^\s*[-*+]\s+/gm, "• ")
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1（$2）")
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1（图片：$2）")
-      .replace(/^\s{0,3}>\s?/gm, "")
-      .replace(/\n\s*\|[-:| ]+\|\s*\n/g, "\n")
-      .replace(/\|/g, "｜");
-  }
-
-  private splitWechatMessage(
-    text: string,
-    maxLength: number,
-    maxSegments: number
-  ): string[] {
-    const segments: string[] = [];
-    let rest = text.trim();
-    while (rest.length > maxLength && segments.length < maxSegments - 1) {
-      const cutAt = this.findSplitIndex(rest, maxLength);
-      segments.push(rest.slice(0, cutAt).trim());
-      rest = rest.slice(cutAt).trim();
-    }
-    if (rest.length > maxLength && segments.length >= maxSegments - 1) {
-      segments.push(`${rest.slice(0, maxLength - 18).trim()}\n\n（内容较长，已截断）`);
-    } else if (rest) {
-      segments.push(rest);
-    }
-    return segments.filter(Boolean);
-  }
-
-  private findSplitIndex(text: string, maxLength: number): number {
-    const candidates = ["\n\n", "\n", "。", "？", "！", ".", "?", "!", "；", ";", "，", ","];
-    let best = -1;
-    for (const delimiter of candidates) {
-      const index = text.lastIndexOf(delimiter, maxLength);
-      if (index > Math.floor(maxLength * 0.45)) {
-        best = Math.max(best, index + delimiter.length);
-      }
-    }
-    return best > 0 ? best : maxLength;
+    return prepareReplyForWechat(text, {
+      stripMarkdown: Config.stripMarkdown,
+      botName: this.botName,
+      context,
+    });
   }
 
   private async sendReminder(weChatBot: any, reminder: ReminderItem) {
@@ -4007,40 +3678,6 @@ export class WechatCompanion {
     ].includes(String(action));
   }
 
-  private isGroupMode(mode: unknown): mode is GroupMode {
-    return ["quiet", "smart", "active", "super_active", "talkative"].includes(
-      String(mode)
-    );
-  }
-
-  private parseGroupModeValue(text: string): GroupMode | null {
-    const compact = text.trim().replace(/^\/+/, "").toLowerCase();
-    const modeMap: Record<string, GroupMode> = {
-      "1": "quiet",
-      quiet: "quiet",
-      "安静": "quiet",
-      "少说话": "quiet",
-      "2": "smart",
-      smart: "smart",
-      "智能": "smart",
-      "正常": "smart",
-      "3": "active",
-      active: "active",
-      "活跃": "active",
-      "4": "super_active",
-      superactive: "super_active",
-      "super_active": "super_active",
-      "超活跃": "super_active",
-      "超级活跃": "super_active",
-      "5": "talkative",
-      talkative: "talkative",
-      chatty: "talkative",
-      "话唠": "talkative",
-      "畅聊": "talkative",
-    };
-    return modeMap[compact] || null;
-  }
-
   private mayNeedTool(text: string, context?: ChatContext): boolean {
     const compact = text.replace(/\s+/g, "");
     return (
@@ -4057,7 +3694,7 @@ export class WechatCompanion {
         compact
       ) ||
       this.isExplicitCodeRunRequest(text) ||
-      (context?.scope === "group" && this.looksLikeModeSwitchRequest(text))
+      (context?.scope === "group" && looksLikeModeSwitchRequest(text))
     );
   }
 
@@ -4111,134 +3748,6 @@ export class WechatCompanion {
     return /[?？]|吗|怎么|为什么|如何|谁知道|有没有|能不能|可以不|咋办/.test(
       text
     );
-  }
-
-  private parseDirectGroupModeCommand(
-    text: string
-  ):
-    | { type: "none" }
-    | { type: "menu" }
-    | { type: "status" }
-    | { type: "switch"; mode: GroupMode } {
-    const compact = text.replace(/\s+/g, "");
-    if (/^\/(模式|群模式|机器人模式|mode|help|\?)$/i.test(compact)) {
-      return { type: "menu" };
-    }
-    if (/^\/([12345])(?:安静|智能|活跃|超级活跃|超活跃|话唠)?$/.test(compact)) {
-      const modeMap: Record<string, GroupMode> = {
-        "1": "quiet",
-        "2": "smart",
-        "3": "active",
-        "4": "super_active",
-        "5": "talkative",
-      };
-      return { type: "switch", mode: modeMap[compact[1]] };
-    }
-    if (/^\/(安静|静默|少说话|quiet|silent)$/.test(compact)) {
-      return { type: "switch", mode: "quiet" };
-    }
-    if (/^\/(智能|正常|默认|smart|normal)$/.test(compact)) {
-      return { type: "switch", mode: "smart" };
-    }
-    if (/^\/(活跃|主动|积极|多说话|active)$/.test(compact)) {
-      return { type: "switch", mode: "active" };
-    }
-    if (/^\/(超级活跃|超活跃|很活跃|superactive|super_active)$/.test(compact)) {
-      return { type: "switch", mode: "super_active" };
-    }
-    if (/^\/(话唠|畅聊|talkative|chatty)$/.test(compact)) {
-      return { type: "switch", mode: "talkative" };
-    }
-    if (/^(群聊模式|群模式|机器人模式|切换模式|模式切换)$/.test(compact)) {
-      return { type: "menu" };
-    }
-    if (/现在(是)?什么模式|当前(是)?什么模式|什么群聊模式|什么机器人模式/.test(compact)) {
-      return { type: "status" };
-    }
-    const mode = this.parseNaturalGroupMode(text);
-    return mode ? { type: "switch", mode } : { type: "none" };
-  }
-
-  private parseNaturalGroupMode(text: string): GroupMode | null {
-    const compact = text.replace(/\s+/g, "");
-    if (/安静一点|少说话|别太主动|别刷屏|只@/.test(compact)) {
-      return "quiet";
-    }
-    if (/恢复正常|正常回复|默认模式|智能一点/.test(compact)) {
-      return "smart";
-    }
-    if (/话唠|畅聊|特别能聊|多聊点|话多一点/.test(compact)) {
-      return "talkative";
-    }
-    if (/超级活跃|超活跃|更活跃|很活跃/.test(compact)) {
-      return "super_active";
-    }
-    if (/活跃一点|积极一点|多说点|主动一点/.test(compact)) {
-      return "active";
-    }
-    const looksLikeModeCommand =
-      /群聊模式|群模式|机器人模式|进入.*模式|切换.*模式|改成.*模式/.test(
-        compact
-      );
-    if (!looksLikeModeCommand) {
-      return null;
-    }
-    if (/安静|静默|只@|只艾特|少说话/.test(compact)) {
-      return "quiet";
-    }
-    if (/智能|聪明|正常|默认/.test(compact)) {
-      return "smart";
-    }
-    if (/话唠|畅聊|特别能聊|多聊/.test(compact)) {
-      return "talkative";
-    }
-    if (/超级活跃|超活跃|很活跃|更活跃/.test(compact)) {
-      return "super_active";
-    }
-    if (/活跃|主动|积极|多说话/.test(compact)) {
-      return "active";
-    }
-    return null;
-  }
-
-  private looksLikeModeSwitchRequest(text: string): boolean {
-    return /群聊模式|群模式|机器人模式|切换模式|进入.*模式|改成.*模式|安静一点|少说话|别太主动|活跃一点|超级活跃|超活跃|话唠|多聊点|积极一点|多说点|正常回复|默认模式/i.test(
-      text.replace(/\s+/g, "")
-    );
-  }
-
-  private groupModeMenu(): string {
-    return [
-      "群聊模式：",
-      "/1 安静：只在被 @ 或触发词出现时回复",
-      "/2 智能：明显问到我或需要工具时回复",
-      `/3 活跃：更主动参与，${Config.activeGroupCooldownSeconds} 秒冷却`,
-      `/4 超活跃：更积极接话，${Config.superActiveGroupCooldownSeconds} 秒冷却`,
-      `/5 话唠：高频聊天，${Config.talkativeGroupCooldownSeconds} 秒冷却`,
-      "也可以直接发：/安静 /智能 /活跃 /超活跃 /话唠",
-    ].join("\n");
-  }
-
-  private describeGroupMode(mode: GroupMode): string {
-    const descriptions: Record<GroupMode, string> = {
-      quiet: "安静模式：只在被 @ 或触发词出现时回复",
-      smart: "智能模式：被明显问到或需要工具时回复",
-      active: `活跃模式：会更积极参与，${Config.activeGroupCooldownSeconds} 秒冷却`,
-      super_active: `超级活跃模式：更积极接话，${Config.superActiveGroupCooldownSeconds} 秒冷却`,
-      talkative: `话唠模式：更像群友聊天，${Config.talkativeGroupCooldownSeconds} 秒冷却`,
-    };
-    return descriptions[mode];
-  }
-
-  private shortGroupModeLabel(mode: GroupMode): string {
-    const labels: Record<GroupMode, string> = {
-      quiet: "安静",
-      smart: "智能",
-      active: "活跃",
-      super_active: "超活跃",
-      talkative: "话唠",
-    };
-    return labels[mode];
   }
 
   private parseChineseNumber(text: string): number | null {
