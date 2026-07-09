@@ -932,29 +932,148 @@ function renderLoginHtml(): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bot Console Login</title>
+  <script>
+    (function(){
+      try {
+        var theme = localStorage.getItem('bot_console_theme') || 'system';
+        if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        } else if (theme && theme !== 'system' && theme !== 'light') {
+          document.documentElement.setAttribute('data-theme', theme);
+        }
+      } catch(e) {}
+    })();
+  </script>
   <style>
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #eef2f7; color: #172033; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .box { width: min(420px, calc(100% - 32px)); background: #fff; border: 1px solid #dde4ee; border-radius: 12px; padding: 28px; box-shadow: 0 22px 70px rgba(20, 32, 55, .12); }
-    h1 { margin: 0 0 8px; font-size: 24px; }
-    p { margin: 0 0 22px; color: #667085; line-height: 1.6; }
-    label { display: block; font-size: 13px; color: #667085; margin-bottom: 8px; }
-    input { width: 100%; box-sizing: border-box; border: 1px solid #cfd7e3; border-radius: 8px; padding: 12px; font: inherit; }
-    button { width: 100%; border: 0; border-radius: 8px; background: #2563eb; color: #fff; padding: 12px; font-weight: 800; margin-top: 14px; cursor: pointer; }
-    .err { color: #b42318; min-height: 22px; margin-top: 12px; }
-    .hint { margin-top: 18px; font-size: 12px; color: #8a94a6; }
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+      --err: #ef4444;
+    }
+    [data-theme="dark"] {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --ink: #f8fafc;
+      --muted: #94a3b8;
+      --line: #334155;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --shadow: 0 20px 25px -5px rgb(0 0 0 / 0.4), 0 8px 10px -6px rgb(0 0 0 / 0.4);
+      --err: #f87171;
+    }
+    [data-theme="ocean"] {
+      --bg: #ecfeff;
+      --panel: #ffffff;
+      --ink: #083344;
+      --muted: #0e7490;
+      --line: #bae6fd;
+      --primary: #0891b2;
+      --primary-hover: #0e7490;
+      --shadow: 0 20px 40px -12px rgb(8 145 178 / 0.22);
+      --err: #e11d48;
+    }
+    [data-theme="forest"] {
+      --bg: #f0fdf4;
+      --panel: #ffffff;
+      --ink: #052e16;
+      --muted: #15803d;
+      --line: #bbf7d0;
+      --primary: #16a34a;
+      --primary-hover: #15803d;
+      --shadow: 0 20px 40px -12px rgb(22 101 52 / 0.2);
+      --err: #dc2626;
+    }
+    [data-theme="sunset"] {
+      --bg: #fff7ed;
+      --panel: #ffffff;
+      --ink: #431407;
+      --muted: #c2410c;
+      --line: #fed7aa;
+      --primary: #ea580c;
+      --primary-hover: #c2410c;
+      --shadow: 0 20px 40px -12px rgb(234 88 12 / 0.22);
+      --err: #be123c;
+    }
+    [data-theme="berry"] {
+      --bg: #fdf2f8;
+      --panel: #ffffff;
+      --ink: #500724;
+      --muted: #be185d;
+      --line: #fbcfe8;
+      --primary: #db2777;
+      --primary-hover: #be185d;
+      --shadow: 0 20px 40px -12px rgb(219 39 119 / 0.22);
+      --err: #dc2626;
+    }
+    [data-theme="terminal"] {
+      --bg: #020617;
+      --panel: #07140d;
+      --ink: #dcfce7;
+      --muted: #86efac;
+      --line: #14532d;
+      --primary: #22c55e;
+      --primary-hover: #16a34a;
+      --shadow: 0 20px 40px -12px rgb(34 197 94 / 0.2);
+      --err: #fb7185;
+    }
+    body { 
+      margin: 0; min-height: 100vh; display: grid; place-items: center; 
+      background: var(--bg); color: var(--ink); 
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      transition: background-color 0.3s ease;
+    }
+    .box { 
+      width: min(420px, calc(100% - 32px)); 
+      background: var(--panel); 
+      border: 1px solid var(--line); 
+      border-radius: 16px; 
+      padding: 32px; 
+      box-shadow: var(--shadow); 
+      transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+    h1 { margin: 0 0 8px; font-size: 26px; font-weight: 800; }
+    p { margin: 0 0 24px; color: var(--muted); line-height: 1.6; font-size: 14px; }
+    label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+    input { 
+      width: 100%; box-sizing: border-box; 
+      border: 2px solid var(--line); 
+      border-radius: 10px; 
+      padding: 12px 16px; font: inherit; 
+      background: transparent; color: var(--ink);
+      transition: border-color 0.2s;
+      outline: none;
+    }
+    input:focus { border-color: var(--primary); }
+    button { 
+      width: 100%; border: 0; border-radius: 10px; 
+      background: var(--primary); color: #fff; 
+      padding: 14px; font-weight: 700; font-size: 15px; 
+      margin-top: 16px; cursor: pointer; 
+      transition: background-color 0.2s, transform 0.1s; 
+    }
+    button:hover { background: var(--primary-hover); }
+    button:active { transform: scale(0.98); }
+    .err { color: var(--err); min-height: 22px; margin-top: 12px; font-size: 14px; font-weight: 500;}
+    .hint { margin-top: 24px; font-size: 12px; color: var(--muted); line-height: 1.5; text-align: center; }
   </style>
 </head>
 <body>
   <main class="box">
     <h1>Bot Console</h1>
-    <p>输入 root token 后进入控制台。不要把 token 放进 URL 或截图里。</p>
+    <p>请输入 root token 进入控制台。请勿泄露您的访问凭据。</p>
     <form id="loginForm">
-      <label for="token">Root token</label>
-      <input id="token" name="token" type="password" autocomplete="current-password" autofocus />
-      <button type="submit">登录</button>
+      <label for="token">Root Token</label>
+      <input id="token" name="token" type="password" autocomplete="current-password" placeholder="••••••••" autofocus />
+      <button type="submit">登录安全终端</button>
       <div class="err" id="err"></div>
     </form>
-    <div class="hint">建议后续给 dawnfy.top 配 HTTPS；HTTP 下 token 仍会经过明文链路。</div>
+    <div class="hint">安全建议：生产环境请配置 HTTPS 证书，<br>避免 Token 在 HTTP 下明文传输。</div>
   </main>
   <script>
     document.getElementById('loginForm').addEventListener('submit', async function (event) {
@@ -962,15 +1081,26 @@ function renderLoginHtml(): string {
       const err = document.getElementById('err');
       err.textContent = '';
       const token = document.getElementById('token').value;
-      const res = await fetch('./login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      if (res.ok) {
-        location.href = './';
-      } else {
-        err.textContent = 'token 不对，或者服务器没有配置 rootAuthToken。';
+      const btn = event.target.querySelector('button');
+      btn.textContent = '登录中...';
+      btn.style.opacity = '0.7';
+      try {
+        const res = await fetch('./login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+        if (res.ok) {
+          location.href = './';
+        } else {
+          err.textContent = 'Token 校验失败，或服务器未配置 rootAuthToken。';
+          btn.textContent = '登录安全终端';
+          btn.style.opacity = '1';
+        }
+      } catch (e) {
+        err.textContent = '网络请求失败，请重试。';
+        btn.textContent = '登录安全终端';
+        btn.style.opacity = '1';
       }
     });
   </script>
@@ -985,74 +1115,283 @@ function renderDashboardHtml(): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>BananaBot Console</title>
+  <script>
+    (function(){
+      try {
+        var theme = localStorage.getItem('bot_console_theme') || 'system';
+        if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        } else if (theme && theme !== 'system' && theme !== 'light') {
+          document.documentElement.setAttribute('data-theme', theme);
+        }
+      } catch(e) {}
+    })();
+  </script>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f3f6fb;
+      --bg: #f8fafc;
       --panel: #ffffff;
-      --ink: #172033;
-      --muted: #667085;
-      --line: #dce3ed;
-      --blue: #2563eb;
-      --green: #078855;
-      --amber: #b54708;
-      --red: #b42318;
-      --slate: #344054;
-      --shadow: 0 14px 40px rgba(20, 32, 55, .08);
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --primary-bg: #e0e7ff;
+      --success-bg: #dcfce7;
+      --success-text: #166534;
+      --warn-bg: #fef9c3;
+      --warn-text: #854d0e;
+      --danger-bg: #fee2e2;
+      --danger-text: #991b1b;
+      --sidebar-bg: #0f172a;
+      --sidebar-text: #f1f5f9;
+      --sidebar-hover: #1e293b;
+      --sidebar-muted: #94a3b8;
+      --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+      --radius: 16px;
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #020617;
+      --panel: #0f172a;
+      --ink: #f8fafc;
+      --muted: #94a3b8;
+      --line: #1e293b;
+      --primary: #6366f1;
+      --primary-hover: #818cf8;
+      --primary-bg: rgba(79, 70, 229, 0.2);
+      --success-bg: rgba(22, 101, 52, 0.3);
+      --success-text: #4ade80;
+      --warn-bg: rgba(133, 77, 14, 0.3);
+      --warn-text: #facc15;
+      --danger-bg: rgba(153, 27, 27, 0.3);
+      --danger-text: #f87171;
+      --sidebar-bg: #020617;
+      --sidebar-text: #f8fafc;
+      --sidebar-hover: #1e293b;
+      --sidebar-muted: #64748b;
+      --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.4);
+    }
+    [data-theme="ocean"] {
+      color-scheme: light;
+      --bg: #ecfeff;
+      --panel: #ffffff;
+      --ink: #083344;
+      --muted: #0e7490;
+      --line: #bae6fd;
+      --primary: #0891b2;
+      --primary-hover: #0e7490;
+      --primary-bg: #cffafe;
+      --success-bg: #ccfbf1;
+      --success-text: #0f766e;
+      --warn-bg: #fef3c7;
+      --warn-text: #92400e;
+      --danger-bg: #ffe4e6;
+      --danger-text: #be123c;
+      --sidebar-bg: #083344;
+      --sidebar-text: #ecfeff;
+      --sidebar-hover: #155e75;
+      --sidebar-muted: #a5f3fc;
+      --shadow: 0 10px 28px -16px rgb(8 145 178 / 0.36);
+    }
+    [data-theme="forest"] {
+      color-scheme: light;
+      --bg: #f0fdf4;
+      --panel: #ffffff;
+      --ink: #052e16;
+      --muted: #15803d;
+      --line: #bbf7d0;
+      --primary: #16a34a;
+      --primary-hover: #15803d;
+      --primary-bg: #dcfce7;
+      --success-bg: #bbf7d0;
+      --success-text: #166534;
+      --warn-bg: #fef9c3;
+      --warn-text: #854d0e;
+      --danger-bg: #fee2e2;
+      --danger-text: #991b1b;
+      --sidebar-bg: #052e16;
+      --sidebar-text: #f0fdf4;
+      --sidebar-hover: #14532d;
+      --sidebar-muted: #bbf7d0;
+      --shadow: 0 10px 28px -16px rgb(22 101 52 / 0.32);
+    }
+    [data-theme="sunset"] {
+      color-scheme: light;
+      --bg: #fff7ed;
+      --panel: #ffffff;
+      --ink: #431407;
+      --muted: #c2410c;
+      --line: #fed7aa;
+      --primary: #ea580c;
+      --primary-hover: #c2410c;
+      --primary-bg: #ffedd5;
+      --success-bg: #dcfce7;
+      --success-text: #166534;
+      --warn-bg: #fef3c7;
+      --warn-text: #92400e;
+      --danger-bg: #ffe4e6;
+      --danger-text: #be123c;
+      --sidebar-bg: #431407;
+      --sidebar-text: #fff7ed;
+      --sidebar-hover: #7c2d12;
+      --sidebar-muted: #fed7aa;
+      --shadow: 0 10px 28px -16px rgb(234 88 12 / 0.34);
+    }
+    [data-theme="berry"] {
+      color-scheme: light;
+      --bg: #fdf2f8;
+      --panel: #ffffff;
+      --ink: #500724;
+      --muted: #be185d;
+      --line: #fbcfe8;
+      --primary: #db2777;
+      --primary-hover: #be185d;
+      --primary-bg: #fce7f3;
+      --success-bg: #dcfce7;
+      --success-text: #166534;
+      --warn-bg: #fef3c7;
+      --warn-text: #92400e;
+      --danger-bg: #fee2e2;
+      --danger-text: #991b1b;
+      --sidebar-bg: #500724;
+      --sidebar-text: #fdf2f8;
+      --sidebar-hover: #831843;
+      --sidebar-muted: #fbcfe8;
+      --shadow: 0 10px 28px -16px rgb(219 39 119 / 0.32);
+    }
+    [data-theme="terminal"] {
+      color-scheme: dark;
+      --bg: #020617;
+      --panel: #07140d;
+      --ink: #dcfce7;
+      --muted: #86efac;
+      --line: #14532d;
+      --primary: #22c55e;
+      --primary-hover: #16a34a;
+      --primary-bg: rgba(34, 197, 94, 0.18);
+      --success-bg: rgba(34, 197, 94, 0.18);
+      --success-text: #86efac;
+      --warn-bg: rgba(250, 204, 21, 0.18);
+      --warn-text: #fde047;
+      --danger-bg: rgba(244, 63, 94, 0.18);
+      --danger-text: #fb7185;
+      --sidebar-bg: #000000;
+      --sidebar-text: #dcfce7;
+      --sidebar-hover: #052e16;
+      --sidebar-muted: #86efac;
+      --shadow: 0 10px 28px -16px rgb(34 197 94 / 0.4);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
-    .app { min-height: 100vh; display: grid; grid-template-columns: 236px 1fr; }
-    aside { background: #111827; color: #eef2ff; padding: 22px 16px; position: sticky; top: 0; height: 100vh; }
-    .brand { font-weight: 900; font-size: 19px; margin-bottom: 20px; }
-    nav { display: grid; gap: 8px; }
-    nav button { text-align: left; color: #cbd5e1; background: transparent; border: 0; border-radius: 8px; padding: 10px 12px; font: inherit; cursor: pointer; }
-    nav button.active, nav button:hover { background: #253046; color: #fff; }
-    .logout { display: block; color: #cbd5e1; text-decoration: none; margin-top: 22px; font-size: 13px; }
-    main { padding: 24px; min-width: 0; }
-    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
-    h1 { margin: 0; font-size: 26px; }
-    .sub { color: var(--muted); margin-top: 4px; }
-    .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 800; background: #e7eefb; color: #1d4ed8; }
-    .pill.ok { background: #dff7e8; color: #067647; }
-    .pill.warn { background: #fff4db; color: #92400e; }
-    .pill.bad { background: #ffe4e8; color: #b42318; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    body { 
+      margin: 0; background: var(--bg); color: var(--ink); 
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; 
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 240px 1fr; }
+    aside { 
+      background: var(--sidebar-bg); color: var(--sidebar-text); 
+      padding: 24px 16px; position: sticky; top: 0; height: 100vh; 
+      display: flex; flex-direction: column;
+      border-right: 1px solid var(--line);
+      transition: background-color 0.3s ease;
+    }
+    .brand { font-weight: 900; font-size: 20px; margin-bottom: 24px; padding: 0 12px; letter-spacing: -0.5px;}
+    nav { display: grid; gap: 6px; flex: 1; align-content: flex-start; }
+    nav button { 
+      text-align: left; color: var(--sidebar-muted); background: transparent; 
+      border: 0; border-radius: 10px; padding: 12px 14px; font: inherit; font-size: 14px; font-weight: 500;
+      cursor: pointer; transition: all 0.2s; 
+    }
+    nav button.active, nav button:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
+    .aside-footer { margin-top: auto; display: grid; gap: 12px; padding: 0 12px;}
+    .theme-select {
+      width: 100%; padding: 10px; background: var(--sidebar-hover); color: var(--sidebar-text);
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; font-size: 13px; outline: none; cursor: pointer;
+    }
+    .logout { display: block; color: var(--sidebar-muted); text-decoration: none; font-size: 14px; padding: 8px 0; transition: color 0.2s;}
+    .logout:hover { color: var(--danger-text); }
+    
+    main { padding: 32px; min-width: 0; }
+    .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+    .sub { color: var(--muted); margin-top: 6px; font-size: 14px; }
+    .pill { 
+      display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; 
+      padding: 6px 14px; font-size: 13px; font-weight: 700; 
+      background: var(--primary-bg); color: var(--primary); 
+    }
+    .pill.ok { background: var(--success-bg); color: var(--success-text); }
+    .pill.warn { background: var(--warn-bg); color: var(--warn-text); }
+    .pill.bad { background: var(--danger-bg); color: var(--danger-text); }
+    
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
     .grid.two { grid-template-columns: 1.2fr .8fr; }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 16px; min-width: 0; }
-    .metric-label { color: var(--muted); font-size: 13px; }
-    .metric { font-size: 26px; font-weight: 900; margin-top: 6px; }
-    .section { display: none; }
+    .card { 
+      background: var(--panel); border: 1px solid var(--line); 
+      border-radius: var(--radius); box-shadow: var(--shadow); 
+      padding: 24px; min-width: 0; 
+      transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+    .card h3 { margin: 0 0 16px 0; font-size: 16px; font-weight: 700; }
+    .metric-label { color: var(--muted); font-size: 14px; font-weight: 500; }
+    .metric { font-size: 30px; font-weight: 800; margin-top: 8px; letter-spacing: -0.5px;}
+    
+    .section { display: none; animation: fadeIn 0.3s ease; }
     .section.active { display: block; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 14px; }
-    input, select { border: 1px solid #cfd7e3; border-radius: 8px; padding: 8px 10px; font: inherit; background: #fff; }
-    button.action { border: 1px solid #cfd7e3; background: #fff; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
-    button.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
-    th { color: #475467; font-size: 12px; background: #f8fafc; position: sticky; top: 0; z-index: 1; }
-    tr:hover td { background: #fbfdff; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 0 0 20px; }
+    input, select { 
+      border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; 
+      font: inherit; background: var(--panel); color: var(--ink); font-size: 14px; outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--primary); }
+    button.action { 
+      border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+      border-radius: 10px; padding: 10px 14px; cursor: pointer; font-size: 14px; font-weight: 500;
+      transition: all 0.2s;
+    }
+    button.action:hover { border-color: var(--primary); color: var(--primary); }
+    
+    .table-container { overflow-x: auto; margin: -24px; padding: 24px; }
+    table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 14px 12px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 13px; font-weight: 600; background: var(--bg); position: sticky; top: 0; z-index: 1; }
+    th:first-child { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+    th:last-child { border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg); }
+    
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; background: var(--bg); padding: 2px 6px; border-radius: 6px; color: var(--primary); }
     .muted { color: var(--muted); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .list { display: grid; gap: 10px; }
-    .event { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fff; }
-    .event-title { font-weight: 800; }
-    .event-detail { color: var(--muted); margin-top: 4px; word-break: break-word; }
-    .split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; }
-    .drawer { position: sticky; top: 18px; max-height: calc(100vh - 36px); overflow: auto; }
-    .tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-    .tabs button { border: 0; background: #fff; padding: 8px 12px; cursor: pointer; }
-    .tabs button.active { background: #e7eefb; color: var(--blue); font-weight: 800; }
-    .empty { color: var(--muted); padding: 18px; text-align: center; }
-    .bar { height: 8px; background: #e8edf5; border-radius: 999px; overflow: hidden; }
-    .bar span { display: block; height: 100%; background: #2563eb; }
-    @media (max-width: 980px) {
+    .list { display: grid; gap: 12px; }
+    .event { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--panel); transition: border-color 0.2s; }
+    .event:hover { border-color: var(--primary); }
+    .event-title { font-weight: 700; font-size: 15px;}
+    .event-detail { color: var(--muted); margin-top: 8px; word-break: break-word; line-height: 1.5;}
+    
+    .split { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 20px; }
+    .drawer { position: sticky; top: 32px; max-height: calc(100vh - 64px); overflow: auto; }
+    .tabs { display: inline-flex; background: var(--line); border-radius: 10px; overflow: hidden; padding: 2px; }
+    .tabs button { border: 0; background: transparent; padding: 8px 16px; cursor: pointer; color: var(--muted); font-weight: 500; border-radius: 8px; font-size: 14px; transition: all 0.2s;}
+    .tabs button:hover { color: var(--ink); }
+    .tabs button.active { background: var(--panel); color: var(--primary); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .empty { color: var(--muted); padding: 32px 16px; text-align: center; font-size: 14px; }
+    
+    .bar { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .bar span { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+    
+    @media (max-width: 1024px) {
       .app { grid-template-columns: 1fr; }
-      aside { position: static; height: auto; }
-      nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      aside { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 16px; }
+      nav { grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+      .aside-footer { flex-direction: row; justify-content: space-between; align-items: center; margin-top: 16px; padding: 0; }
+      .theme-select { width: auto; }
       .grid, .grid.two, .split { grid-template-columns: 1fr; }
-      main { padding: 16px; }
+      main { padding: 20px; }
     }
   </style>
 </head>
@@ -1061,33 +1400,45 @@ function renderDashboardHtml(): string {
     <aside>
       <div class="brand">BananaBot</div>
       <nav>
-        <button class="active" data-section="overview">总览</button>
-        <button data-section="chats">会话</button>
-        <button data-section="usage">Token</button>
-        <button data-section="reminders">提醒</button>
-        <button data-section="memories">记忆</button>
-        <button data-section="recent">事件</button>
+        <button class="active" data-section="overview">仪表盘总览</button>
+        <button data-section="chats">会话管理</button>
+        <button data-section="usage">Token 消耗</button>
+        <button data-section="reminders">定时提醒</button>
+        <button data-section="memories">记忆库</button>
+        <button data-section="recent">实时事件</button>
       </nav>
-      <a class="logout" href="./logout">退出登录</a>
+      <div class="aside-footer">
+        <select class="theme-select" id="themeSelect">
+          <option value="system">跟随系统</option>
+          <option value="light">浅色模式</option>
+          <option value="dark">暗黑模式</option>
+          <option value="ocean">海盐蓝</option>
+          <option value="forest">青竹绿</option>
+          <option value="sunset">日落橙</option>
+          <option value="berry">荔枝粉</option>
+          <option value="terminal">终端绿</option>
+        </select>
+        <a class="logout" href="./logout">退出登录</a>
+      </div>
     </aside>
     <main>
       <div class="topbar">
         <div>
-          <h1>Bot Console</h1>
-          <div class="sub" id="subtitle">Loading...</div>
+          <h1>控制台数据中心</h1>
+          <div class="sub" id="subtitle">正在加载数据...</div>
         </div>
-        <div id="statePill" class="pill">Loading</div>
+        <div id="statePill" class="pill">加载中</div>
       </div>
 
       <section id="overview" class="section active">
         <div class="grid" id="metricGrid"></div>
-        <div class="grid two" style="margin-top:14px;">
+        <div class="grid two" style="margin-top:20px;">
           <div class="card">
-            <h3>高消耗会话</h3>
+            <h3>高消耗会话 Top 8</h3>
             <div id="topChats"></div>
           </div>
           <div class="card">
-            <h3>模型</h3>
+            <h3>模型配置参数</h3>
             <div id="modelBox"></div>
           </div>
         </div>
@@ -1096,42 +1447,50 @@ function renderDashboardHtml(): string {
       <section id="chats" class="section">
         <div class="toolbar">
           <div class="tabs">
-            <button class="active" data-scope="">全部</button>
-            <button data-scope="group">群聊</button>
-            <button data-scope="private">私聊</button>
+            <button class="active" data-scope="">全部分组</button>
+            <button data-scope="group">仅群聊</button>
+            <button data-scope="private">仅私聊</button>
           </div>
-          <input id="chatSearch" placeholder="搜索会话名" />
-          <button class="action" id="refreshChats">刷新</button>
+          <input id="chatSearch" placeholder="搜索会话名称..." style="flex:1; max-width: 300px;" />
+          <button class="action" id="refreshChats">↻ 刷新列表</button>
         </div>
         <div class="split">
-          <div class="card" style="overflow:auto;">
-            <table>
-              <thead><tr><th>会话</th><th>状态</th><th>今日</th><th>总 Token</th><th>最近</th><th>操作</th></tr></thead>
-              <tbody id="chatRows"></tbody>
-            </table>
+          <div class="card">
+            <div class="table-container">
+              <table>
+                <thead><tr><th>会话名称</th><th>权限状态</th><th>今日统计</th><th>总 Token</th><th>最近活跃</th><th>管理操作</th></tr></thead>
+                <tbody id="chatRows"></tbody>
+              </table>
+            </div>
           </div>
-          <div class="card drawer" id="chatDetail"><div class="empty">选择一个会话查看详情</div></div>
+          <div class="card drawer" id="chatDetail"><div class="empty">👈 请在左侧选择一个会话查看详细信息</div></div>
         </div>
       </section>
 
       <section id="usage" class="section">
         <div class="toolbar">
-          <select id="usageDays"><option value="7">最近 7 天</option><option value="14">最近 14 天</option><option value="30">最近 30 天</option></select>
-          <button class="action" id="refreshUsage">刷新</button>
+          <select id="usageDays">
+            <option value="7">查看最近 7 天</option>
+            <option value="14">查看最近 14 天</option>
+            <option value="30">查看最近 30 天</option>
+          </select>
+          <button class="action" id="refreshUsage">↻ 重新计算</button>
         </div>
         <div class="grid" id="usageMetrics"></div>
-        <div class="grid two" style="margin-top:14px;">
-          <div class="card"><h3>按日期</h3><div id="usageByDate"></div></div>
-          <div class="card"><h3>按模型 / 功能</h3><div id="usageByModel"></div></div>
+        <div class="grid two" style="margin-top:20px;">
+          <div class="card"><h3>按日期统计</h3><div id="usageByDate"></div></div>
+          <div class="card"><h3>按模型与功能分类</h3><div id="usageByModel"></div></div>
         </div>
       </section>
 
       <section id="reminders" class="section">
-        <div class="card" style="overflow:auto;">
-          <table>
-            <thead><tr><th>时间</th><th>会话</th><th>内容</th><th>状态</th><th>操作</th></tr></thead>
-            <tbody id="reminderRows"></tbody>
-          </table>
+        <div class="card">
+          <div class="table-container">
+            <table>
+              <thead><tr><th>触发时间</th><th>目标会话</th><th>提醒内容</th><th>当前状态</th><th>管理</th></tr></thead>
+              <tbody id="reminderRows"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -1146,18 +1505,55 @@ function renderDashboardHtml(): string {
   </div>
 
   <script>
+    // --- Theme Logic ---
+    const themeSelect = document.getElementById('themeSelect');
+    const root = document.documentElement;
+
+    function applyTheme(theme) {
+      if (theme === 'system') {
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+          root.setAttribute('data-theme', 'dark');
+        } else {
+          root.removeAttribute('data-theme');
+        }
+      } else if (theme === 'dark') {
+        root.setAttribute('data-theme', 'dark');
+      } else if (theme && theme !== 'light') {
+        root.setAttribute('data-theme', theme);
+      } else {
+        root.removeAttribute('data-theme');
+      }
+    }
+
+    const savedTheme = localStorage.getItem('bot_console_theme') || 'system';
+    themeSelect.value = themeSelect.querySelector('option[value="' + savedTheme + '"]') ? savedTheme : 'system';
+    applyTheme(themeSelect.value);
+
+    themeSelect.addEventListener('change', function (e) {
+      const theme = e.target.value;
+      localStorage.setItem('bot_console_theme', theme);
+      applyTheme(theme);
+    });
+
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+      if (localStorage.getItem('bot_console_theme') === 'system') {
+        applyTheme('system');
+      }
+    });
+
+    // --- State & App Logic ---
     const state = { section: 'overview', scope: '', chats: [], selectedChatId: '', showRaw: false };
     const groupModes = [
-      ['quiet', '安静'],
-      ['smart', '智能'],
-      ['active', '活跃'],
-      ['super_active', '超活跃'],
-      ['talkative', '话唠']
+      ['quiet', '安静模式'],
+      ['smart', '智能模式'],
+      ['active', '活跃模式'],
+      ['super_active', '超活跃模式'],
+      ['talkative', '话唠模式']
     ];
     const accessOptions = [
-      ['default', '默认'],
-      ['allow', '允许'],
-      ['deny', '禁止']
+      ['default', '默认策略'],
+      ['allow', '强制允许'],
+      ['deny', '强制禁止']
     ];
 
     function esc(value) {
@@ -1193,14 +1589,14 @@ function renderDashboardHtml(): string {
     }
     function renderMetrics(metrics) {
       document.getElementById('metricGrid').innerHTML = [
-        ['会话', metrics.chats],
-        ['群聊', metrics.groups],
-        ['私聊', metrics.privates],
+        ['总计会话', metrics.chats],
+        ['服务群聊', metrics.groups],
+        ['服务私聊', metrics.privates],
         ['今日 Token', metrics.usageToday.totalTokens],
         ['今日调用', metrics.usageToday.calls],
-        ['提醒', metrics.pendingReminders + '/' + metrics.reminders],
-        ['记忆', metrics.memories],
-        ['总消息', metrics.messages]
+        ['待办提醒', metrics.pendingReminders + ' / ' + metrics.reminders],
+        ['留存记忆', metrics.memories],
+        ['处理消息', metrics.messages]
       ].map(function (item) {
         return '<div class="card"><div class="metric-label">' + esc(item[0]) + '</div><div class="metric">' + esc(fmtNum(item[1])) + '</div></div>';
       }).join('');
@@ -1208,18 +1604,18 @@ function renderDashboardHtml(): string {
     async function loadOverview() {
       const data = await api('./api/overview');
       const status = data.status;
-      document.getElementById('subtitle').textContent = '账号 ' + (status.loginUserName || '-') + ' · 运行 ' + Math.floor(status.uptimeSeconds / 60) + ' 分钟';
+      document.getElementById('subtitle').textContent = '登陆微信: ' + (status.loginUserName || '未登录') + ' · 稳定运行 ' + Math.floor(status.uptimeSeconds / 60) + ' 分钟';
       const pill = document.getElementById('statePill');
-      pill.textContent = status.wechatState === 'logged_in' ? '已登录' : status.wechatState;
+      pill.textContent = status.wechatState === 'logged_in' ? '🟢 引擎运行中' : (status.wechatState === 'waiting_scan' ? '🟡 等待扫码' : '🔴 ' + status.wechatState);
       pill.className = 'pill ' + (status.wechatState === 'logged_in' ? 'ok' : status.wechatState === 'waiting_scan' ? 'warn' : 'bad');
       renderMetrics(data.totals);
       document.getElementById('modelBox').innerHTML = Object.entries(data.models).map(function (entry) {
-        return '<p><span class="muted">' + esc(entry[0]) + '</span><br><code>' + esc(entry[1]) + '</code></p>';
+        return '<div style="margin-bottom: 12px;"><div class="metric-label">' + esc(entry[0].toUpperCase()) + '</div><code style="display:inline-block; margin-top:4px;">' + esc(entry[1]) + '</code></div>';
       }).join('');
       document.getElementById('topChats').innerHTML = data.topChatsByTokens.length ? data.topChatsByTokens.map(function (chat) {
         const pct = data.topChatsByTokens[0].todayTokens ? Math.round(chat.todayTokens / data.topChatsByTokens[0].todayTokens * 100) : 0;
-        return '<div style="margin:12px 0;"><div><b>' + esc(chat.chatName) + '</b> <span class="muted">' + esc(chat.scope) + '</span><span style="float:right">' + fmtNum(chat.todayTokens) + '</span></div><div class="bar"><span style="width:' + pct + '%"></span></div></div>';
-      }).join('') : '<div class="empty">今天还没有 token 消耗</div>';
+        return '<div style="margin:16px 0;"><div><b style="font-size:14px;">' + esc(chat.chatName) + '</b> <span class="muted" style="font-size:12px; margin-left:4px;">' + esc(chat.scope) + '</span><span style="float:right; font-weight:700; color:var(--primary);">' + fmtNum(chat.todayTokens) + '</span></div><div class="bar"><span style="width:' + pct + '%"></span></div></div>';
+      }).join('') : '<div class="empty">今天还没有产生任何 Token 消耗</div>';
     }
     async function loadChats() {
       const data = await api('./api/chats' + (state.scope ? '?scope=' + encodeURIComponent(state.scope) : ''));
@@ -1232,15 +1628,22 @@ function renderDashboardHtml(): string {
         return !query || chat.chatName.toLowerCase().includes(query);
       }).map(function (chat) {
         const modeSelect = chat.scope === 'group'
-          ? '<select data-action="mode" data-id="' + esc(chat.chatId) + '">' + groupModes.map(function (m) { return '<option value="' + m[0] + '"' + (chat.groupMode === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('') + '</select>'
-          : '<span class="muted">-</span>';
-        const accessSelect = '<select data-action="access" data-id="' + esc(chat.chatId) + '">' + accessOptions.map(function (opt) { return '<option value="' + opt[0] + '"' + (chat.access === opt[0] ? ' selected' : '') + '>' + opt[1] + '</option>'; }).join('') + '</select>';
+          ? '<select data-action="mode" data-id="' + esc(chat.chatId) + '" style="margin-bottom:4px;width:100%;">' + groupModes.map(function (m) { return '<option value="' + m[0] + '"' + (chat.groupMode === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('') + '</select>'
+          : '';
+        const accessSelect = '<select data-action="access" data-id="' + esc(chat.chatId) + '" style="margin-bottom:4px;width:100%;">' + accessOptions.map(function (opt) { return '<option value="' + opt[0] + '"' + (chat.access === opt[0] ? ' selected' : '') + '>聊天: ' + opt[1] + '</option>'; }).join('') + '</select>';
         const videoSelect = chat.scope === 'private'
-          ? '<select data-action="privateVideo" data-id="' + esc(chat.chatId) + '">' + accessOptions.map(function (opt) { return '<option value="' + opt[0] + '"' + (chat.privateVideo === opt[0] ? ' selected' : '') + '>' + opt[1] + '</option>'; }).join('') + '</select>'
-          : '<span class="muted">-</span>';
-        return '<tr><td><button class="action" data-action="detail" data-id="' + esc(chat.chatId) + '">' + esc(chat.chatName) + '</button><br><code>' + esc(chat.idShort) + '</code> <span class="muted">' + esc(chat.scope === 'group' ? '群聊' : '私聊') + '</span></td><td>' + (chat.scope === 'group' ? '群模式 ' + esc(modeLabel(chat.groupMode)) + '<br>' : '视频 ' + esc(accessLabel(chat.privateVideo)) + '<br>') + '聊天 ' + esc(accessLabel(chat.access)) + '</td><td>消息 ' + fmtNum(chat.todayMessageCount) + '<br>Token ' + fmtNum(chat.todayTokens) + '</td><td>' + fmtNum(chat.totalTokens) + '</td><td>' + esc(fmtDate(chat.lastMessageAt)) + '<br><span class="muted">' + esc(chat.lastMessageType) + '</span></td><td>群模式 ' + modeSelect + '<br>聊天 ' + accessSelect + '<br>视频 ' + videoSelect + '</td></tr>';
+          ? '<select data-action="privateVideo" data-id="' + esc(chat.chatId) + '" style="width:100%;">' + accessOptions.map(function (opt) { return '<option value="' + opt[0] + '"' + (chat.privateVideo === opt[0] ? ' selected' : '') + '>视频: ' + opt[1] + '</option>'; }).join('') + '</select>'
+          : '';
+        return '<tr>' +
+          '<td><button class="action" data-action="detail" data-id="' + esc(chat.chatId) + '" style="margin-bottom:6px;">' + esc(chat.chatName) + '</button><br><code>' + esc(chat.idShort) + '</code> <span class="muted" style="font-size:12px">' + esc(chat.scope === 'group' ? '群聊' : '私聊') + '</span></td>' +
+          '<td><div style="font-size:13px; line-height: 1.6;">' + (chat.scope === 'group' ? '<span class="muted">群模式</span> ' + esc(modeLabel(chat.groupMode)) + '<br>' : '<span class="muted">视频</span> ' + esc(accessLabel(chat.privateVideo)) + '<br>') + '<span class="muted">聊天</span> ' + esc(accessLabel(chat.access)) + '</div></td>' +
+          '<td><div style="font-size:13px; line-height: 1.6;"><span class="muted">消息</span> ' + fmtNum(chat.todayMessageCount) + '<br><span class="muted">Token</span> <span style="color:var(--primary); font-weight:600">' + fmtNum(chat.todayTokens) + '</span></div></td>' +
+          '<td><span style="font-weight:600">' + fmtNum(chat.totalTokens) + '</span></td>' +
+          '<td><div style="font-size:12px; line-height: 1.6;">' + esc(fmtDate(chat.lastMessageAt)) + '<br><span class="pill" style="padding:2px 8px; font-size:11px; margin-top:4px;">' + esc(chat.lastMessageType) + '</span></div></td>' +
+          '<td style="min-width:130px;">' + modeSelect + accessSelect + videoSelect + '</td>' +
+          '</tr>';
       }).join('');
-      document.getElementById('chatRows').innerHTML = rows || '<tr><td colspan="6" class="empty">没有会话</td></tr>';
+      document.getElementById('chatRows').innerHTML = rows || '<tr><td colspan="6" class="empty">列表中暂无会话数据</td></tr>';
     }
     async function loadChatDetail(chatId, raw) {
       state.selectedChatId = chatId;
@@ -1248,45 +1651,46 @@ function renderDashboardHtml(): string {
       const data = await api('./api/chat?id=' + encodeURIComponent(chatId) + '&raw=' + (state.showRaw ? '1' : '0'));
       const chat = data.chat;
       if (!chat) return;
-      document.getElementById('chatDetail').innerHTML = '<h3>' + esc(chat.chatName) + '</h3><p class="muted">' + esc(chat.scope) + ' · ' + esc(chat.idShort || '') + '</p><button class="action" id="toggleRaw">' + (state.showRaw ? '隐藏原文' : '显示原文') + '</button><h4>最近消息</h4><div class="list">' + (data.messages.map(function (msg) { return '<div class="event"><div class="event-title">' + esc(msg.talkerName || msg.role) + ' · ' + esc(msg.messageType) + '</div><div class="muted">' + esc(fmtDate(msg.timestamp)) + '</div><div class="event-detail">' + esc(msg.text) + '</div></div>'; }).join('') || '<div class="empty">没有消息</div>') + '</div><h4>提醒</h4>' + smallList(data.reminders, 'content') + '<h4>记忆</h4>' + smallList(data.memories, 'content');
+      document.getElementById('chatDetail').innerHTML = '<h3 style="margin-top:0; font-size:20px;">' + esc(chat.chatName) + '</h3><p class="muted" style="font-size:13px; margin-bottom: 24px;">' + esc(chat.scope) + ' · ' + esc(chat.idShort || '') + '</p><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;"><h4 style="margin:0;">最近消息</h4><button class="action" id="toggleRaw" style="padding: 6px 12px; font-size: 12px;">' + (state.showRaw ? '隐藏原文' : '显示原文') + '</button></div><div class="list">' + (data.messages.map(function (msg) { return '<div class="event" style="padding:12px;"><div class="event-title" style="font-size:14px;">' + esc(msg.talkerName || msg.role) + ' <span class="muted" style="font-weight:normal; font-size:12px; margin-left:4px;">' + esc(msg.messageType) + '</span></div><div class="muted" style="font-size:12px; margin-top:2px;">' + esc(fmtDate(msg.timestamp)) + '</div><div class="event-detail" style="font-size:13px; margin-top:6px;">' + esc(msg.text) + '</div></div>'; }).join('') || '<div class="empty" style="padding:16px;">没有消息</div>') + '</div><h4 style="margin-top:32px; margin-bottom:12px;">定时提醒</h4>' + smallList(data.reminders, 'content') + '<h4 style="margin-top:32px; margin-bottom:12px;">记忆片段</h4>' + smallList(data.memories, 'content');
       document.getElementById('toggleRaw').onclick = function () { loadChatDetail(chatId, !state.showRaw); };
     }
     function smallList(items, field) {
-      return '<div class="list">' + (items.slice(0, 8).map(function (item) { return '<div class="event"><div class="muted">' + esc(fmtDate(item.timestamp || item.remindAt || item.createdAt)) + '</div><div class="event-detail">' + esc(item[field] || '-') + '</div></div>'; }).join('') || '<div class="empty">无</div>') + '</div>';
+      return '<div class="list">' + (items.slice(0, 8).map(function (item) { return '<div class="event" style="padding:12px;"><div class="muted" style="font-size:12px;">' + esc(fmtDate(item.timestamp || item.remindAt || item.createdAt)) + '</div><div class="event-detail" style="font-size:13px; margin-top:4px;">' + esc(item[field] || '-') + '</div></div>'; }).join('') || '<div class="empty" style="padding:16px;">暂无记录</div>') + '</div>';
     }
     async function loadUsage() {
       const days = document.getElementById('usageDays').value;
       const data = await api('./api/usage?days=' + days);
       document.getElementById('usageMetrics').innerHTML = [
-        ['总 Token', data.total.totalTokens],
-        ['调用次数', data.total.calls],
-        ['输入 Token', data.total.promptTokens],
-        ['输出 Token', data.total.completionTokens]
-      ].map(function (item) { return '<div class="card"><div class="metric-label">' + item[0] + '</div><div class="metric">' + fmtNum(item[1]) + '</div></div>'; }).join('');
-      document.getElementById('usageByDate').innerHTML = data.byDate.map(function (row) { return '<p><b>' + esc(row.date) + '</b><span style="float:right">' + fmtNum(row.totalTokens) + ' tokens</span></p>'; }).join('');
-      document.getElementById('usageByModel').innerHTML = '<h4>模型</h4>' + usageList(data.byModel) + '<h4>功能</h4>' + usageList(data.byFeature);
+        ['累计 Token', data.total.totalTokens],
+        ['模型调用次数', data.total.calls],
+        ['输入 (Prompt) Token', data.total.promptTokens],
+        ['输出 (Completion) Token', data.total.completionTokens]
+      ].map(function (item) { return '<div class="card"><div class="metric-label">' + item[0] + '</div><div class="metric" style="color:var(--primary);">' + fmtNum(item[1]) + '</div></div>'; }).join('');
+      document.getElementById('usageByDate').innerHTML = data.byDate.map(function (row) { return '<div style="display:flex; justify-content:space-between; padding: 12px 0; border-bottom: 1px dashed var(--line);"><b style="font-size:14px; color:var(--muted);">' + esc(row.date) + '</b><span style="font-weight:700;">' + fmtNum(row.totalTokens) + ' <span style="font-weight:normal; font-size:12px; color:var(--muted);">tokens</span></span></div>'; }).join('');
+      document.getElementById('usageByModel').innerHTML = '<h4 style="margin-top:0;">按模型分发</h4>' + usageList(data.byModel) + '<h4 style="margin-top:32px;">按功能场景</h4>' + usageList(data.byFeature);
     }
     function usageList(rows) {
-      return rows.map(function (row) { return '<p><code>' + esc(row.name) + '</code><span style="float:right">' + fmtNum(row.totalTokens) + '</span></p>'; }).join('') || '<div class="empty">无</div>';
+      return rows.map(function (row) { return '<div style="display:flex; justify-content:space-between; align-items:center; padding: 8px 0; border-bottom: 1px solid var(--line);"><code>' + esc(row.name) + '</code><span style="font-weight:600;">' + fmtNum(row.totalTokens) + '</span></div>'; }).join('') || '<div class="empty" style="padding:16px;">无数据</div>';
     }
     async function loadReminders() {
       const data = await api('./api/reminders');
       document.getElementById('reminderRows').innerHTML = data.items.map(function (item) {
-        const cancel = item.status === 'pending' ? '<button class="action" data-action="cancelReminder" data-id="' + esc(item.id) + '">取消</button>' : '';
-        return '<tr><td>' + esc(fmtDate(item.remindAt)) + '</td><td>' + esc(item.chatName) + '</td><td>' + esc(item.content) + '</td><td>' + esc(item.status) + '</td><td>' + cancel + '</td></tr>';
-      }).join('') || '<tr><td colspan="5" class="empty">没有提醒</td></tr>';
+        const cancel = item.status === 'pending' ? '<button class="action" data-action="cancelReminder" data-id="' + esc(item.id) + '" style="color:var(--danger-text); border-color:var(--danger-bg);">取消提醒</button>' : '';
+        const statusPill = item.status === 'pending' ? '<span class="pill warn">待执行</span>' : '<span class="pill ok">' + esc(item.status) + '</span>';
+        return '<tr><td>' + esc(fmtDate(item.remindAt)) + '</td><td style="font-weight:500;">' + esc(item.chatName) + '</td><td>' + esc(item.content) + '</td><td>' + statusPill + '</td><td>' + cancel + '</td></tr>';
+      }).join('') || '<tr><td colspan="5" class="empty">没有设置任何提醒</td></tr>';
     }
     async function loadMemories() {
       const data = await api('./api/memories');
       document.getElementById('memoryList').innerHTML = data.items.map(function (item) {
-        return '<div class="event"><div class="event-title">' + esc(item.chatName) + '</div><div class="muted">' + esc(fmtDate(item.timestamp)) + '</div><div class="event-detail">' + esc(item.content) + '</div></div>';
-      }).join('') || '<div class="empty">没有记忆</div>';
+        return '<div class="event"><div style="display:flex; justify-content:space-between; align-items:center;"><div class="event-title">' + esc(item.chatName) + '</div><div class="muted" style="font-size:13px;">' + esc(fmtDate(item.timestamp)) + '</div></div><div class="event-detail" style="margin-top:12px;">' + esc(item.content) + '</div></div>';
+      }).join('') || '<div class="empty">知识库中暂无记忆</div>';
     }
     async function loadRecent() {
       const data = await api('./api/recent');
       document.getElementById('recentList').innerHTML = data.items.map(function (item) {
-        return '<div class="event"><div class="event-title">' + esc(item.title) + '</div><div class="muted">' + esc(fmtDate(item.at)) + ' · ' + esc(item.type) + '</div><div class="event-detail">' + esc(item.detail) + '</div></div>';
-      }).join('') || '<div class="empty">没有事件</div>';
+        return '<div class="event"><div style="display:flex; justify-content:space-between; align-items:flex-start;"><div class="event-title" style="color:var(--primary);">' + esc(item.title) + '</div><div class="muted" style="font-size:12px; text-align:right;">' + esc(fmtDate(item.at)) + '<br><span style="background:var(--bg); padding:2px 6px; border-radius:4px; margin-top:4px; display:inline-block;">' + esc(item.type) + '</span></div></div><div class="event-detail" style="margin-top:8px;">' + esc(item.detail) + '</div></div>';
+      }).join('') || '<div class="empty">近期没有任何事件</div>';
     }
     async function setGroupMode(chatId, mode) {
       await api('./api/settings/group-mode', { method: 'POST', body: JSON.stringify({ chatId, mode }) });
@@ -1340,6 +1744,7 @@ function renderDashboardHtml(): string {
     document.getElementById('refreshChats').onclick = loadChats;
     document.getElementById('refreshUsage').onclick = loadUsage;
     document.getElementById('usageDays').onchange = loadUsage;
+    
     loadOverview();
     setInterval(function () {
       if (state.section === 'overview') loadOverview();
