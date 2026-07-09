@@ -3445,7 +3445,7 @@ export class WechatCompanion {
           timeout: 8000,
           headers: {
             "User-Agent":
-              "Mozilla/5.0 (compatible; MyWechatBot/1.0; +https://github.com/Meloding/MyWechatBot)",
+              "Mozilla/5.0 (compatible; BananaBot/1.0; +https://github.com/Meloding/BananaBot)",
           },
         },
         (response) => {
@@ -3496,7 +3496,7 @@ export class WechatCompanion {
           timeout: 10000,
           headers: {
             "User-Agent":
-              "Mozilla/5.0 (compatible; MyWechatBot/1.0; +https://github.com/Meloding/MyWechatBot)",
+              "Mozilla/5.0 (compatible; BananaBot/1.0; +https://github.com/Meloding/BananaBot)",
             Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
           },
         },

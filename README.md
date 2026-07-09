@@ -100,7 +100,7 @@ tar -xf node-v16.20.2-linux-x64.tar.xz
 
 ```bash
 cd /opt
-git clone git@github.com:Meloding/MyWechatBot.git my-wechat-bot
+git clone git@github.com:Meloding/BananaBot.git my-wechat-bot
 cd /opt/my-wechat-bot
 ```
 
@@ -725,5 +725,5 @@ git status --short --ignored
 当前 GitHub 仓库：
 
 ```text
-git@github.com:Meloding/MyWechatBot.git
+git@github.com:Meloding/BananaBot.git
 ```

@@ -984,7 +984,7 @@ function renderDashboardHtml(): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MyWechatBot Console</title>
+  <title>BananaBot Console</title>
   <style>
     :root {
       color-scheme: light;
@@ -1059,7 +1059,7 @@ function renderDashboardHtml(): string {
 <body>
   <div class="app">
     <aside>
-      <div class="brand">MyWechatBot</div>
+      <div class="brand">BananaBot</div>
       <nav>
         <button class="active" data-section="overview">总览</button>
         <button data-section="chats">会话</button>
