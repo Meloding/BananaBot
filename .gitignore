@@ -12,6 +12,8 @@ data/
 
 # Build output and caches
 dist/
+doc/
+docs/
 *.tsbuildinfo
 .npm/
 .cache/
